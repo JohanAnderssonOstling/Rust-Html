@@ -1,26 +1,22 @@
-use floem::unit::UnitExt;
-use floem::view::View;
-use floem::views::{container, Decorators, stack, v_stack};
+use floem::{IntoView, View, ViewId};
+use floem::views::{container, Decorators};
+use rbook::{Ebook, Epub};
+use crate::epub_reader::EpubReader;
 
-use crate::book_renderer::book_renderer;
-
-mod book_renderer;
-mod epub;
+mod html_renderer;
+mod epub_reader;
 mod book_elem;
-
+mod css;
+mod layout;
 
 fn app_view() -> impl View {
-    container(
-        book_renderer("/home/johan/Hem/Downloads/A Concise History of Switzerland -- Clive H_ Church; Randolph C_ Head -- 2013 -- Cambridge University Press -- 9780521143820 -- 046e534312eeda8990a82749ebab90fc -- Anna’s Archive.epub").style(move |s|  {
-            s.width(100.pct())
-        }),
-    ).style(move |s|  {
-        s.width(100.pct())
-    })
+    let mut epub_renderer = EpubReader::new("/home/johan/Hem/Downloads/A Concise History of Switzerland.epub");
+    epub_renderer = epub_renderer.style(move |style| {style.width_full()});
+    let mut main_container = container(epub_renderer);
+    main_container = main_container.style(move |style| {style.width_full()});
+    main_container.into_view()
 }
-
 
 fn main() {
     floem::launch(app_view);
-    println!("Hello, world!");
 }
