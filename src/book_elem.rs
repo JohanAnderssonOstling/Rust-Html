@@ -40,9 +40,9 @@ impl Elem {
 pub struct Elem             { pub size: Size, pub point: Point, pub elem_type: ElemType }
 pub enum ElemType           { Block(BlockElem), Lines(ElemLines) }
 pub struct BlockElem        { pub children: Vec<Elem>, pub total_child_count: usize, }
-pub struct ElemLines        { height: f64, pub elem_lines: Vec<ElemLine> }
-pub struct ElemLine         { pub height: f64, pub inline_elems: Vec<InlineElem> }
-pub struct InlineElem       { pub x: f64, pub inline_content: InlineContent }
+pub struct ElemLines        { height: f64, pub elem_lines: Vec<ElemLine>, pub inline_elems: Vec<InlineElem> }
+pub struct ElemLine         { pub height: f64, pub point: Point, pub elem_indexes: Vec<usize> }
+pub struct InlineElem       { pub x: f64, pub size: Size, pub inline_content: InlineContent }
 
 pub struct InlineItem       { size: Size, inline_content: InlineContent }
 pub enum InlineContent      { Text(TextLayout) }
@@ -57,23 +57,23 @@ impl BookElemFactory {
         elem_lines
     }
     
-    pub fn layout_elem_lines(&mut self, inline_items: Vec<InlineItem>, width: f64) -> Elem{
+    /*pub fn layout_elem_lines(&mut self, inline_items: Vec<InlineItem>, width: f64) -> Elem{
         let init_point      = Point::new(self.curr_x, self.curr_y);
         let mut elem_lines  = ElemLines {height: 0., elem_lines: Vec::new()};
-        let mut curr_line   = ElemLine  {height: 0., inline_elems: Vec::new()};
+        let mut curr_line   = ElemLine  {height: 0., elem_indexes: Vec::new()};
         for inline_item in inline_items {
             if self.curr_x + inline_item.size.width > 600. {
                 elem_lines          = self.add_line(curr_line, elem_lines);
-                curr_line           = ElemLine {height: 0., inline_elems: Vec::new()};
+                curr_line           = ElemLine {height: 0., elem_indexes: Vec::new()};
             }
             curr_line.height    = f64::max(curr_line.height, inline_item.size.height);
             let inline_elem     = InlineElem {x: self.curr_x, inline_content: inline_item.inline_content};
             self.curr_x         += inline_item.size.width;
-            curr_line.inline_elems.push(inline_elem);
+            curr_line.elem_indexes.push(inline_elem);
         }
         elem_lines = self.add_line(curr_line, elem_lines);
         Elem {size: Size::new(width, elem_lines.height), point: init_point, elem_type: ElemType::Lines(elem_lines)}
-    }
+    }*/
     
     pub fn parse(&mut self, node: Node, font: Attrs) -> Elem {
         if node.tag_name().name().eq("html") {
@@ -82,36 +82,33 @@ impl BookElemFactory {
             }
         }
         let mut block_elem = BlockElem {children: Vec::new(), total_child_count: 0};
-        let mut inline_items: Vec<InlineItem> = Vec::new();
+        let mut inline_elems: Vec<InlineElem> = Vec::new();
         let attrs_list = AttrsList::new(font);
-        let init_point = Point::new(self.curr_x, self.curr_y);
-        let mut top = 0.;
-        let mut bottom = 0.;
-        if node.tag_name().name().eq("p") {
-            top = font.font_size as f64;
-            bottom = font.font_size as f64;
-        }
-        self.curr_y += top;
         for child in node.children() {
             let tag_name = child.tag_name().name();
             if BLOCK_ELEMENTS.contains(&tag_name) {
-                if inline_items.len() != 0 {
-                    block_elem.add_child(self.layout_elem_lines(inline_items, 600.));
-                    inline_items = Vec::new();
+                if inline_elems.len() != 0 {
+                    let elem_lines = ElemLines {height: 0., elem_lines: Vec::new(), inline_elems};
+                    let new_elem = Elem {size: Size::new(0.,0.,), point: Point::new(0.,0.,), elem_type: ElemType::Lines(elem_lines)};
+                    block_elem.add_child(new_elem);
+                    inline_elems = Vec::new();
                 }
                 block_elem.add_child(self.parse(child, font));
             }
-            else if tag_name.eq("") { inline_items.extend(self.parse_text(child, attrs_list.clone())); }
-            else                    { inline_items.extend(self.parse_inline(child, attrs_list.clone())); }
+            else if tag_name.eq("") { inline_elems.extend(self.parse_text(child, attrs_list.clone())); }
+            else                    { inline_elems.extend(self.parse_inline(child, attrs_list.clone())); }
         }
-        if inline_items.len() != 0 { block_elem.add_child(self.layout_elem_lines(inline_items, 600.)); }
-        self.curr_y += bottom;
+        if inline_elems.len() != 0 {
+            let elem_lines = ElemLines {height: 0., elem_lines: Vec::new(), inline_elems};
+            let new_elem = Elem {size: Size::new(0.,0.,), point: Point::new(0.,0.,), elem_type: ElemType::Lines(elem_lines)};
+            block_elem.add_child(new_elem);
+        }
         let block_height = block_elem.children.iter().fold(0., |acc, elem| acc + elem.size.height);
-        Elem {size: Size::new(600., block_height + top + bottom), point: init_point, elem_type: ElemType::Block(block_elem)}
+        Elem {size: Size::new(0.,0.), point: Point::new(0.,0.), elem_type: ElemType::Block(block_elem)}
     }
 
-    pub fn parse_inline(&self, node: Node, attrs_list: AttrsList) -> Vec<InlineItem> {
-        let mut inline_items: Vec<InlineItem> = Vec::new();
+    pub fn parse_inline(&self, node: Node, attrs_list: AttrsList) -> Vec<InlineElem> {
+        let mut inline_items: Vec<InlineElem> = Vec::new();
         for child in node.children() {
             if child.tag_name().name().eq("") { inline_items.extend(self.parse_text(child, attrs_list.clone())); }
             else { inline_items.extend(self.parse_inline(child, attrs_list.clone())); }
@@ -119,14 +116,14 @@ impl BookElemFactory {
         inline_items
     }
 
-    pub fn parse_text(&self, node: Node, attrs_list: AttrsList) -> Vec<InlineItem> {
-        let mut inline_items: Vec<InlineItem> = Vec::new();
+    pub fn parse_text(&self, node: Node, attrs_list: AttrsList) -> Vec<InlineElem> {
+        let mut inline_items: Vec<InlineElem> = Vec::new();
         if node.text().unwrap().eq("\n") {return Vec::new()}
         for word in node.text().unwrap().split(" ") {
             let mut text_layout = TextLayout::new();
             text_layout.set_text(format!{"{word} "}.as_str(), attrs_list.clone());
             let size = text_layout.size();
-            inline_items.push(InlineItem {size, inline_content: InlineContent::Text(text_layout)});
+            inline_items.push(InlineElem {x: 0., size, inline_content: InlineContent::Text(text_layout)});
         }
         inline_items
     }

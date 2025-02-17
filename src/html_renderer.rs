@@ -2,12 +2,15 @@ use std::ops::Deref;
 use std::rc::Rc;
 use std::time::Instant;
 use floem::{View, ViewId};
-use floem::context::{EventCx, PaintCx};
+use floem::context::{ComputeLayoutCx, EventCx, LayoutCx, PaintCx};
 use floem::event::{Event, EventPropagation};
 use floem::keyboard::{Key, NamedKey};
-use floem::kurbo::{Point, Size};
+use floem::kurbo::{Point, Rect, Size, Stroke};
+use floem::peniko::{Brush, Color};
 use floem::prelude::{create_rw_signal, SignalUpdate};
 use floem::reactive::{create_effect, RwSignal, SignalGet, SignalRead};
+use floem::taffy::NodeId;
+use floem::taffy::prelude::line;
 use floem::views::Decorators;
 use floem_renderer::Renderer;
 use floem_renderer::text::{Attrs, LineHeightValue};
@@ -15,6 +18,8 @@ use roxmltree::Document;
 use sha2::Digest;
 
 use crate::book_elem::{BookElemFactory, Elem, ElemLine, ElemType, InlineContent};
+use crate::layout::Layout;
+
 #[derive(Clone)]
 struct RenderState {
     x: f64,
@@ -36,6 +41,7 @@ pub struct HtmlRenderer {
     col_count: f64,
     col_gap: f64,
     scale: f64,
+    layout: bool,
 
     start_offset_y: f64,
     end_offset_y: f64,
@@ -52,11 +58,13 @@ impl HtmlRenderer {
         let now = Instant::now();
         let root_elem = book_factory.parse(document.root_element(), base_font);
         println!("Elapsed {}", now.elapsed().as_millis());
+
         let mut html_renderer = HtmlRenderer {id: ViewId::new(), start_index: Vec::new(), end_index: Vec::new(),
             col_gap: 0., col_width: 600., col_count: 0.
             , size: Size::default(), start_offset_y: 0., end_offset_y: 0.,
-            render_forward: true, scale: 1.0, orig_col_width: 600., root_elem
+            render_forward: true, scale: 1.0, orig_col_width: 600., root_elem, layout: false,
         };
+
         html_renderer = html_renderer.keyboard_navigable();
         //html_renderer.id.request_focus();
         html_renderer
@@ -86,7 +94,7 @@ impl HtmlRenderer {
         self.render_forward = false;
     }
 
-    fn resolve_point(&self, point: Point, elem_height: f64, mut render_state: RenderState) -> (RenderState, Point) {
+    /*fn resolve_point(&self, point: Point, elem_height: f64, mut render_state: RenderState) -> (RenderState, Point) {
         let mut y = point.y + render_state.y - self.start_offset_y;
         let mut col_index = (y / (self.size.height / self.scale) ).floor();
         y = y - col_index * (self.size.height / self.scale);
@@ -111,7 +119,8 @@ impl HtmlRenderer {
     fn paint_line(&self, cx: &mut PaintCx, elem: &Elem, line: &ElemLine, line_offset_y: f64, mut render_state: RenderState) -> RenderState {
         let mut line_point = Point::new(elem.point.x, elem.point.y + line_offset_y);
         (render_state, line_point) = self.resolve_point(line_point, line.height, render_state);
-        for elem in line.inline_elems.iter() {
+        for index in line.elem_indexes.iter() {
+
             let elem_point = Point::new(line_point.x + elem.x, line_point.y);
             cx.set_scale(self.scale);
             match &elem.inline_content {
@@ -159,15 +168,24 @@ impl HtmlRenderer {
             }
         }
         render_state
-    }
+    }*/
 
     fn paint_recursive(&self, cx: &mut PaintCx, elem: &Elem, mut render_state: RenderState, level: usize, mut index: Vec<usize>) -> (RenderState, f64, Vec<usize>){
         let mut new_offset_y = 0.;
+        if elem.point.x > self.size.width {
+            return (render_state, new_offset_y, index);
+        }
         match &elem.elem_type {
             ElemType::Block(block) => {
+                let col_index = elem.point.x / self.col_width;
+                let col_x = (self.col_gap + col_index * (self.col_gap));
+                let rect = Rect::new(elem.point.x + col_x, elem.point.y, elem.point.x + col_x + elem.size.width, elem.point.y + elem.size.height);
+                let stroke = Stroke::new(2.);
+                let brush = Brush::Solid(Color::BLACK);
+                cx.stroke(&rect, &brush, &stroke);
                 if index.len() <= level { index.push(0);}
                 for child in block.children.iter().skip(index[level]) {
-                    render_state = self.paint_child(cx, child, render_state);
+                    //render_state = self.paint_child(cx, child, render_state);
                     if render_state.terminate           { return (render_state, elem.point.y, index); }
                     (render_state, new_offset_y, index) = self.paint_recursive(cx, child, render_state, level + 1, index);
                     if render_state.terminate           { return (render_state, new_offset_y, index); }
@@ -178,8 +196,17 @@ impl HtmlRenderer {
             ElemType::Lines(lines) => {
                 let mut line_offset_y = 0.;
                 for line in lines.elem_lines.iter() {
-                    render_state = self.paint_line(cx, &elem, &line, line_offset_y, render_state);
-                    line_offset_y += line.height;
+                    //render_state = self.paint_line(cx, &elem, &line, line_offset_y, render_state);
+                    //line_offset_y += line.height;
+                    let col_index = line.point.x / self.col_width;
+                    let col_x = (self.col_gap + col_index * (self.col_gap));
+                    for &index in &line.elem_indexes {
+                        let word = lines.inline_elems.get(index).unwrap();
+                        let point = Point::new(col_x + line.point.x + word.x, line.point.y);
+                        match &word.inline_content {
+                            InlineContent::Text(text) => {cx.draw_text(&text, point)}
+                        }
+                    }
                 }
             }
         }
@@ -198,25 +225,45 @@ impl View for HtmlRenderer {
                     _ => ()
                 }
             }
+            Event::WindowResized(event) => {
+                self.layout = false;
+            }
             _ => ()
         }
-        cx.app_state_mut().request_paint(self.id());
+        //cx.app_state_mut().request_paint(self.id());
         EventPropagation::Continue
     }
+
+
+
     fn paint(&mut self, cx: &mut PaintCx) {
         //if self.root_elem.is_none() {return}
+
         let size                = cx.size();
+        let rect = Rect::new(0.0, 0.0, size.width, size.height);
+
+        // Fill the rectangle with white color        println!("Adding line at: {}", point);
+        if !self.layout {
+            let now = Instant::now();
+            let mut layout = Layout {x: 0., y: 0., width: 600., height: 0., column_width: 600., colum_height: size.height - 20.};
+            layout.layout_elem(&mut self.root_elem);
+            self.layout = true;
+            //println!("Layout time: {}", now.elapsed().as_millis());
+        }
+        
         self.col_count          = (size.width / self.col_width).floor();
         self.size               = Size::new(size.width, size.height);
         self.col_gap            = (size.width - self.col_count * self.col_width) / (self.col_count + 1.);
         let render_state        = RenderState {x: 0., y: 0., col_index: 0., terminate: false};
+        let now = Instant::now();
         if self.render_forward {
             (_, self.end_offset_y, self.end_index) = self.paint_recursive(cx, &self.root_elem, render_state, 0, self.start_index.clone());
         }
-        else {
+        println!("Paint time: {}", now.elapsed().as_millis());
+        /*else {
             (_, self.start_offset_y, self.start_index) = self.paint_backward(cx, &self.root_elem, render_state, 0, self.start_index.clone());
             self.render_forward = true;
-        }
+        }*/
     }
     
 }
