@@ -6,11 +6,12 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-floem = {version = "0.2.0" }
-floem_renderer = "0.2.0"
+floem = {version = "0.2.0"}
+floem_renderer =  { version = "0.2.0"} 
 roxmltree = "0.19.0"
 rbook = "0.5.0"
 image = "0.24.9"
 sha2 = "0.11.0-pre.3"
 rayon = "1.10.0"
 malloc_size_of = "0.1.0"
+rustc_data_structures = "0.1.2"
