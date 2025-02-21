@@ -1,22 +1,26 @@
 use std::collections::HashMap;
+use std::io::Write;
 use std::ops::Deref;
-use std::rc::Rc;
-use std::time::Instant;
+use std::sync::Arc;
+use std::thread::sleep;
+use std::time::Duration;
 use floem::{View, ViewId};
 use floem::context::{EventCx, PaintCx};
 use floem::event::{Event, EventPropagation};
 use floem::keyboard::{Key, NamedKey};
-use floem::kurbo::{Point, Size};
-use floem::prelude::{create_rw_signal, SignalUpdate};
-use floem::reactive::{create_effect, RwSignal, SignalGet, SignalRead};
+use floem::kurbo::{Point, Rect, Size};
+use floem::peniko::{Blob, Format, Image};
+use floem::prelude::{RwSignal, SignalUpdate};
+use floem::reactive::{ReadSignal, SignalGet, SignalRead, SignalWrite, WriteSignal};
 use floem::views::Decorators;
-use floem_renderer::Renderer;
-use floem_renderer::text::{Attrs, LineHeightValue, TextLayout, Weight};
+use floem_renderer::{Img, Renderer};
+use rand::{rng, Rng};
 use roxmltree::Document;
-use rustc_data_structures::fx::FxHashMap;
-use sha2::Digest;
+use sha2::{Digest, Sha256};
 
-use crate::book_elem::{BookElemFactory, Elem, ElemLine, ElemLines, ElemType, GlyphCache, InlineContent};
+use crate::book_elem::{Elem, ElemLine, ElemType, InlineContent};
+use crate::glyph_cache::GlyphCache;
+
 #[derive(Clone)]
 struct RenderState {
     x: f64,
@@ -27,9 +31,8 @@ struct RenderState {
 
 pub struct HtmlRenderer {
     id: ViewId,
-    root_elem: Elem,
 
-    current_url: String,
+    read_current_url: ReadSignal<String>,
     pages: HashMap<String, Elem>,
 
     start_index: Vec<usize>,
@@ -48,26 +51,19 @@ pub struct HtmlRenderer {
     end_offset_y: f64,
 
     render_forward: bool,
+    get_go_on: ReadSignal<bool>,
+    at_ends: WriteSignal<i8>,
 }
 
 impl HtmlRenderer {
 
-    pub fn new(document: &Document, cache: GlyphCache, pages: HashMap<String, Elem>, current_url: String) -> Self{
-        let mut base_font = Attrs::new().font_size(20.).line_height(LineHeightValue::Normal(1.2));
-        //base_font = base_font.font_size(base_font.font_size * 1.5);
-        //let mut cache: HashMap<char, TextLayout> = HashMap::new();
-        let mut book_factory = BookElemFactory::new(cache);
-        let now = Instant::now();
-        let root_elem = book_factory.parse(document.root_element(), base_font);
-        //let mut elem_lines  = ElemLines {height: 0., elem_lines: Vec::new()};
-        //let root_elem = Elem {size: Size::new(0., elem_lines.height), point: Point::new(0.,0.), elem_type: ElemType::Lines(elem_lines)};
-
-        let glyph_cache = book_factory.cache;
-        println!("Elapsed {}", now.elapsed().as_millis());
+    pub fn new(glyph_cache: GlyphCache, pages: HashMap<String, Elem>, read_current_url: ReadSignal<String>, at_ends: WriteSignal<i8>, get_go_on: ReadSignal<bool>) -> Self{
         let mut html_renderer = HtmlRenderer {id: ViewId::new(), start_index: Vec::new(), end_index: Vec::new(),
             col_gap: 0., col_width: 600., col_count: 0.
             , size: Size::default(), start_offset_y: 0., end_offset_y: 0.,
-            render_forward: true, scale: 1.0, orig_col_width: 600., root_elem, glyph_cache, pages, current_url
+            render_forward: true, scale: 1.0, orig_col_width: 600., glyph_cache, pages,
+            read_current_url,
+            get_go_on, at_ends
         };
         html_renderer = html_renderer.keyboard_navigable();
         html_renderer
@@ -75,27 +71,46 @@ impl HtmlRenderer {
     
 
     pub fn next(&mut self) {
-        if self.end_index.len() != 0 && self.end_index[0] == 1 {return;}
+        if self.end_index.len() != 0 && self.end_index[0] == 1 {
+            self.at_ends.set(1);
+            if !self.get_go_on.get() {return}
+            self.start_index = Vec::new();
+            self.start_offset_y = 0.;
+            self.end_index = Vec::new();
+            self.render_forward = true;
+            return;
+        }
+        self.at_ends.set(0);
         self.start_index        = self.end_index.clone();
         self.render_forward = true;
     }
 
     pub fn prev(&mut self ) {
-        if self.start_index.len() == 0 {return}
+        if self.start_index.len() == 0 {
+            self.at_ends.set(-1);
+            if !self.get_go_on.get() {return}
+            self.goto_last();
+            self.render_forward = false;
+            return
+        }
+        self.at_ends.set(0);
         self.end_index          = self.start_index.clone();
         self.render_forward = false;
     }
 
     pub fn goto_last(&mut self) {
-        let root_elem = self.pages.get(&self.current_url).unwrap();
+        let current_url = self.read_current_url.get();
+        let root_elem = self.pages.get(&current_url).unwrap();
 
         let mut last_index = root_elem.get_last_index();
-        let last_elem = root_elem.get_elem(&last_index, 0);
+        //let last_elem = root_elem.get_elem(&last_index, 0);
         self.end_index = last_index;
-        self.start_offset_y     = last_elem.point.y + last_elem.size.height;
-        let content_height      = self.size.height * self.col_count;
 
-        self.start_offset_y     -= content_height as f64;
+        //self.end_index = vec![1];
+        //self.start_offset_y     = last_elem.point.y + last_elem.size.height;
+        //let content_height      = self.size.height * self.col_count;
+
+        //self.start_offset_y     -= content_height as f64;
         self.render_forward = false;
     }
 
@@ -136,7 +151,28 @@ impl HtmlRenderer {
                             cx.draw_text(glyph, glyph_point)
                         }
                     }
+                    InlineContent::Image(image_elem) => {
+                        let image_promise = image_elem.image_promise.read().unwrap();
+
+                        match image_promise.deref() {
+                            None => {println!("No image")}
+                            Some(image) => {
+                                println!("{:#?}", elem_point);
+                                let rect = Rect::new(0., 0., 200., 200.);
+                                //let mut hash = image_elem.hash;
+                                let no_hash: [u8; 1] = [1];
+                                let mut rng = rand::thread_rng(); // Create a random number generator
+                                let mut bytes = [0u8; 8]; // Fixed-size byte array (8 bytes)
+
+                                rng.fill(&mut bytes); // Fill with random bytes
+                                let img = Img {img: image.0.clone(), hash: &image.1};
+
+                                cx.draw_img(img, rect);
+                            }
+                        }
+                    }
                 }
+
             }
             cx.set_scale(1.0);
         }
@@ -211,7 +247,8 @@ impl HtmlRenderer {
                     line_offset_y += line.height;
                 }
             }
-        }
+        }// SAFETY: We check `initialized[index]` before accessing
+
         (render_state, new_offset_y, index)
     }
 }
@@ -234,7 +271,9 @@ impl View for HtmlRenderer {
         EventPropagation::Continue
     }
     fn paint(&mut self, cx: &mut PaintCx) {
-        let root_elem = self.pages.get(&self.current_url).unwrap();
+        let current_url = self.read_current_url.get();
+        //println!("Current url: {current_url}");
+        let root_elem           = self.pages.get(&current_url).unwrap();
         let size                = cx.size();
         self.col_count          = (size.width / self.col_width).floor();
         self.size               = Size::new(size.width, size.height);
@@ -245,15 +284,15 @@ impl View for HtmlRenderer {
                 let first_elem = root_elem.get_elem(&self.start_index, 0);
                 self.start_offset_y = first_elem.point.y;
             }
-            let now = Instant::now();
             (_, self.end_offset_y, self.end_index) = self.paint_recursive(cx, root_elem, render_state, 0, self.start_index.clone());
-            println!("End index: {:#?}", self.end_index);
+             //println!("Start index: {:#?}", self.start_index);
+
         }
         else {
             let last_elem = root_elem.get_elem(&self.end_index, 0);
             let content_height      = self.size.height * self.col_count;
             self.start_offset_y     = last_elem.point.y + last_elem.size.height + 0.0;
-            self.start_offset_y     -= content_height as f64;
+            self.start_offset_y     -= content_height as f64 - 60.;
             if (self.start_offset_y < 0.) {
                 self.start_index = Vec::new();
                 self.start_offset_y = 0.;

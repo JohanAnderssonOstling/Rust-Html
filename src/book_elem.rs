@@ -1,14 +1,20 @@
 use std::collections::HashMap;
 use std::mem::MaybeUninit;
+use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
+use std::vec;
 use floem::kurbo::{Point, Size};
+use floem::peniko::Image;
 use floem::prelude::editor::layout::TextLayoutLine;
 use floem::views::Decorators;
+use floem_renderer::Img;
 use floem_renderer::text::{Attrs, AttrsList, TextLayout};
 use image::DynamicImage;
 use roxmltree::Node;
 use rustc_data_structures::fx::FxHashMap;
 use sha2::{Digest, Sha256};
+use crate::glyph_cache::GlyphCache;
 
 static BLOCK_ELEMENTS: [&str; 37] = [
     "html", "body", "article", "section", "nav", "aside",
@@ -19,59 +25,7 @@ static BLOCK_ELEMENTS: [&str; 37] = [
     "legend", "details", "summary"
 ];
 
-pub struct GlyphCache {
-    small_cache: [MaybeUninit<TextLayout>; 100],
-    initialized: [bool; 100],
-    large_cache: FxHashMap<char, TextLayout>
-}
 
-impl GlyphCache {
-    pub fn new() -> Self {
-        Self {
-            small_cache: unsafe { MaybeUninit::uninit().assume_init() }, // No initialization cost
-            initialized: [false; 100], // All initially false
-            large_cache: FxHashMap::default(),
-        }
-    }
-    pub fn get_or_insert(&mut self, char: char, attrs_list: &AttrsList) -> &TextLayout {
-        let char_index = char as u32;
-        if char_index >= 32 && char_index <= 126 {
-            let index = (char_index - 32) as usize;
-            if self.initialized[index] {
-                // SAFETY: We check `initialized[index]` before accessing
-                return unsafe { self.small_cache[index].assume_init_ref() };
-            }
-            let mut new_layout = TextLayout::new();
-            new_layout.set_text(&char.to_string(), attrs_list.clone());
-
-            // SAFETY: We initialize the value here
-            self.small_cache[index] = MaybeUninit::new(new_layout);
-            self.initialized[index] = true;
-
-            return unsafe { self.small_cache[index].assume_init_ref() };
-        }
-        self.large_cache.entry(char).or_insert_with(|| {
-            let mut layout = TextLayout::new();
-            layout.set_text(&char.to_string(), attrs_list.clone());
-            layout
-        })
-    }
-
-    pub fn get(&self, char: char) -> Option<&TextLayout>{
-        let char_index = char as u32;
-
-        if char_index >= 32 && char_index <= 126 {
-            let index = (char_index - 32) as usize;
-
-            if self.initialized[index] {
-                // SAFETY: We check `initialized[index]` before accessing
-                return unsafe { Some(self.small_cache[index].assume_init_ref()) };
-            }
-            return None;
-        }
-        self.large_cache.get(&char)
-    }
-}
 
 impl BlockElem {
     pub fn add_child (&mut self, elem: Elem) {
@@ -87,8 +41,9 @@ impl Elem {
     pub fn get_elem (&self, index: &Vec<usize>, level: usize) -> &Elem{
         return match &self.elem_type {
             ElemType::Block(block) => {
+                if index.len() == level {return self}
                 let elem = &(block.children[index[level]]);
-                if index.len() <= level { return elem; }
+                //if index.len() <= level { return elem; }
                 elem.get_elem(index, level + 1)
             }
             ElemType::Lines(_) => { self }
@@ -98,6 +53,7 @@ impl Elem {
         let mut indexes = Vec::new();
         match &self.elem_type {
             ElemType::Block(block) => {
+                if block.children.len() == 0 {return Vec::new()}
                 let index = block.children.len() - 1;
                 indexes.push(index);
                 let elem = &block.children[index];
@@ -109,8 +65,8 @@ impl Elem {
             }
         }
     }
-
 }
+pub type ImagePromise = Arc<RwLock<Option<(Image, Vec<u8>)>>>;
 pub struct Elem             { pub size: Size, pub point: Point, pub elem_type: ElemType }
 pub enum ElemType           { Block(BlockElem), Lines(ElemLines) }
 pub struct BlockElem        { pub children: Vec<Elem>, pub total_child_count: usize, }
@@ -119,11 +75,21 @@ pub struct ElemLine         { pub height: f64, pub inline_elems: Vec<InlineElem>
 pub struct InlineElem       { pub x: f64, pub inline_content: InlineContent }
 
 pub struct InlineItem       { size: Size, inline_content: InlineContent }
-pub enum InlineContent      { Text(Vec<CharGlyph>) }
-pub struct CharGlyph       { pub char: char, pub x: f64}
-pub struct BookElemFactory  { pub curr_x: f64, pub curr_y: f64, pub cache: GlyphCache}
+pub enum InlineContent      { Text(Vec<CharGlyph>), Image(ImageElem) }
+pub struct CharGlyph        { pub char: char, pub x: f64}
+#[derive(Clone)]
+pub struct ImageElem { pub width: u32, pub height: u32, pub hash: Vec<u8>, pub image_promise: ImagePromise}
+pub struct BookElemFactory  { 
+    pub curr_x: f64, 
+    pub curr_y: f64,
+    base_path: String,
+    pub cache: GlyphCache,
+    pub images: HashMap<String, ImageElem>
+}
 impl BookElemFactory {
-    pub fn new(cache: GlyphCache) -> Self{ BookElemFactory {curr_x: 0., curr_y: 0.,cache} }
+    pub fn new(cache: GlyphCache, images: HashMap<String, ImageElem>) -> Self{
+        BookElemFactory {curr_x: 0., curr_y: 0.,cache, images, base_path: String::new()}
+    }
     pub fn add_line(&mut self, curr_line: ElemLine, mut elem_lines: ElemLines) -> ElemLines{
         self.curr_x         = 0.;
         self.curr_y         += curr_line.height;
@@ -132,15 +98,24 @@ impl BookElemFactory {
         elem_lines
     }
     
-    pub fn layout_elem_lines(&mut self, inline_items: Vec<InlineItem>, width: f64) -> Elem{
+    pub fn layout_elem_lines(&mut self, mut inline_items: Vec<InlineItem>, width: f64) -> Elem{
         let init_point      = Point::new(self.curr_x, self.curr_y);
         let mut elem_lines  = ElemLines {height: 0., elem_lines: Vec::new()};
         let mut curr_line   = ElemLine  {height: 0., inline_elems: Vec::new()};
         for inline_item in inline_items {
-            if self.curr_x + inline_item.size.width > 600. {
+            if inline_item.size.width > 600. {
+                elem_lines          = self.add_line(curr_line, elem_lines);
+                let new_line        = ElemLine {height: inline_item.size.height, inline_elems: Vec::new()};
+                elem_lines          = self.add_line(new_line, elem_lines);
+                curr_line           = ElemLine {height: 0., inline_elems: Vec::new()};
+                continue
+            }
+            else if self.curr_x + inline_item.size.width > 600. {
                 elem_lines          = self.add_line(curr_line, elem_lines);
                 curr_line           = ElemLine {height: 0., inline_elems: Vec::new()};
             }
+
+
             curr_line.height    = f64::max(curr_line.height, inline_item.size.height);
             let inline_elem     = InlineElem {x: self.curr_x, inline_content: inline_item.inline_content};
             self.curr_x         += inline_item.size.width;
@@ -149,10 +124,11 @@ impl BookElemFactory {
         elem_lines = self.add_line(curr_line, elem_lines);
         Elem {size: Size::new(width, elem_lines.height), point: init_point, elem_type: ElemType::Lines(elem_lines)}
     }
-    
-    pub fn parse_root(&mut self, node: Node, font: Attrs) -> Elem {
+
+    pub fn parse_root(&mut self, node: Node, font: Attrs, file_path: String) -> Elem {
         self.curr_x = 0.;
         self.curr_y = 0.;
+        self.base_path = file_path;
             for child in node.children() {
                 if child.tag_name().name().eq("body") {
                     let mut text_layout = TextLayout::new();
@@ -185,8 +161,14 @@ impl BookElemFactory {
                 }
                 block_elem.add_child(self.parse(child, font));
             }
-            else if tag_name.eq("") { inline_items.extend(self.parse_text(child, attrs_list.clone())); }
-            else                    { inline_items.extend(self.parse_inline(child, attrs_list.clone())); }
+            else if tag_name.eq("")     { inline_items.extend(self.parse_text(child, attrs_list.clone())); }
+            //else if tag_name.eq("img")  { inline_items.push(self.parse_img(child));}
+            else if tag_name.eq("br") {
+                block_elem.add_child(self.layout_elem_lines(inline_items, 600.));
+                inline_items = Vec::new();
+            }
+            else                        { inline_items.extend(self.parse_inline(child, attrs_list.clone())); }
+
         }
         if inline_items.len() != 0 { block_elem.add_child(self.layout_elem_lines(inline_items, 600.)); }
         self.curr_y += bottom;
@@ -224,7 +206,30 @@ impl BookElemFactory {
         }
         inline_items
     }
+    
+    pub fn parse_img(&self, node: Node) -> InlineItem {
+        let relative_path = node.attribute("src").unwrap();
+        let image_path = resolve_path(&self.base_path, relative_path);
+        println!("IMAGEPATH: {relative_path} \n\n {image_path}");
+        let image = self.images.get(&image_path).unwrap();
+        let size = Size::new(image.width as f64, image.height as f64);
+        InlineItem {size, inline_content: InlineContent::Image(image.clone())}
+    }
+}
 
+fn resolve_path(html_path: &str, relative_path: &str) -> String {
+    let html_dir = Path::new(html_path).parent().unwrap_or_else(|| Path::new(""));
+    let joined = html_dir.join(relative_path);
+    let mut normalized_path = PathBuf::new();
+    for component in joined.components() {
+        match component {
+            Component::ParentDir => { normalized_path.pop(); } // Move up a directory
+            Component::CurDir => { /* Ignore "." */ }
+            _ => normalized_path.push(component),
+        }
+    }
+    normalized_path.to_str().unwrap().to_string()
+}
 
     
     /*pub fn img(image: DynamicImage, col_width: f32) -> BookElem{
@@ -235,4 +240,3 @@ impl BookElemFactory {
         println!("Loading image");
         BookElem::Img(image, aspect_ratio, hash)
     }*/
-}

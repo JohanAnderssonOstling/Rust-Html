@@ -6,7 +6,7 @@ use crate::epub_reader::EpubReader;
 mod html_renderer;
 mod epub_reader;
 mod book_elem;
-mod css;
+mod glyph_cache;
 mod layout;
 
 fn app_view() -> impl View {
