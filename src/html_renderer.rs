@@ -1,22 +1,16 @@
 use std::collections::HashMap;
-use std::io::Write;
 use std::ops::Deref;
-use std::sync::Arc;
-use std::thread::sleep;
-use std::time::Duration;
+
 use floem::{View, ViewId};
 use floem::context::{EventCx, PaintCx};
 use floem::event::{Event, EventPropagation};
 use floem::keyboard::{Key, NamedKey};
 use floem::kurbo::{Point, Rect, Size};
-use floem::peniko::{Blob, Format, Image};
-use floem::prelude::{RwSignal, SignalUpdate};
-use floem::reactive::{ReadSignal, SignalGet, SignalRead, SignalWrite, WriteSignal};
+use floem::prelude::SignalUpdate;
+use floem::reactive::{ReadSignal, SignalGet, SignalRead, WriteSignal};
 use floem::views::Decorators;
 use floem_renderer::{Img, Renderer};
-use rand::{rng, Rng};
-use roxmltree::Document;
-use sha2::{Digest, Sha256};
+use sha2::Digest;
 
 use crate::book_elem::{Elem, ElemLine, ElemType, InlineContent};
 use crate::glyph_cache::GlyphCache;
@@ -66,6 +60,7 @@ impl HtmlRenderer {
             get_go_on, at_ends
         };
         html_renderer = html_renderer.keyboard_navigable();
+        html_renderer.id.request_focus();
         html_renderer
     }
     
@@ -101,16 +96,8 @@ impl HtmlRenderer {
     pub fn goto_last(&mut self) {
         let current_url = self.read_current_url.get();
         let root_elem = self.pages.get(&current_url).unwrap();
-
-        let mut last_index = root_elem.get_last_index();
-        //let last_elem = root_elem.get_elem(&last_index, 0);
+        let last_index = root_elem.get_last_index();
         self.end_index = last_index;
-
-        //self.end_index = vec![1];
-        //self.start_offset_y     = last_elem.point.y + last_elem.size.height;
-        //let content_height      = self.size.height * self.col_count;
-
-        //self.start_offset_y     -= content_height as f64;
         self.render_forward = false;
     }
 
@@ -155,47 +142,34 @@ impl HtmlRenderer {
                         let image_promise = image_elem.image_promise.read().unwrap();
 
                         match image_promise.deref() {
-                            None => {println!("No image")}
+                            None => {}
                             Some(image) => {
-                                println!("{:#?}", elem_point);
                                 let rect = Rect::new(0., 0., 200., 200.);
-                                //let mut hash = image_elem.hash;
-                                let no_hash: [u8; 1] = [1];
-                                let mut rng = rand::thread_rng(); // Create a random number generator
-                                let mut bytes = [0u8; 8]; // Fixed-size byte array (8 bytes)
-
-                                rng.fill(&mut bytes); // Fill with random bytes
                                 let img = Img {img: image.0.clone(), hash: &image.1};
-
                                 cx.draw_img(img, rect);
                             }
                         }
                     }
                 }
-
             }
             cx.set_scale(1.0);
         }
         render_state
     }
 
-    fn paint_backward(&self, cx: &mut PaintCx, elem: &Elem, mut render_state: RenderState, level: usize, mut index: Vec<usize>) -> (RenderState, f64, Vec<usize>){
-        let mut new_offset_y = 0.;
+    fn paint_backward(&self, cx: &mut PaintCx, elem: &Elem, mut render_state: RenderState, level: usize, mut index: Vec<usize>) -> (RenderState, Vec<usize>){
         match &elem.elem_type {
             ElemType::Block(block) => {
                 let mut elem_index = 0;
                 if self.end_index.len() > level { elem_index = self.end_index[level]; }
+                if block.children.len() == 0 {return (render_state, index)}
                 if index.len() <= level { index.push(block.children.len() - 1); }
                 let mut last_index = index.clone();
                 for child in block.children.iter().take(elem_index + 1).rev() {
-                    //render_state = self.paint_child(cx, child, render_state);
-                    //if render_state.terminate           { return (render_state, elem.point.y, index); }
                     last_index = index.clone();
-
-                    (render_state, new_offset_y, index) = self.paint_backward(cx, child, render_state, level + 1, index);
-                    if render_state.terminate           {return (render_state, new_offset_y, index); }
+                    (render_state, index) = self.paint_backward(cx, child, render_state, level + 1, index);
+                    if render_state.terminate           {return (render_state, index); }
                     if index[level] != 0    { index[level] -= 1; }
-                    //else {index.pop();}
                 }
                 index.pop();
             }
@@ -204,30 +178,27 @@ impl HtmlRenderer {
                 let mut dummy_state = render_state.clone();
                 for line in lines.elem_lines.iter().rev() {
                     dummy_state  = self.paint_line(cx, &elem, &line, line_offset_y, dummy_state , false);
-                    if dummy_state .terminate       { return (dummy_state , elem.point.y, index);}
+                    if dummy_state .terminate       { return (dummy_state, index);}
                     line_offset_y -= line.height;
                 }
                 line_offset_y = elem.size.height;
                 for line in lines.elem_lines.iter().rev() {
                     render_state = self.paint_line(cx, &elem, &line, line_offset_y, render_state, true);
-                    if render_state.terminate {return (render_state, elem.point.y, index)}
+                    if render_state.terminate {return (render_state, index)}
                     line_offset_y -= line.height;
                 }
             }
         }
-        (render_state, new_offset_y, index)
+        (render_state, index)
     }
 
-    fn paint_recursive(&self, cx: &mut PaintCx, elem: &Elem, mut render_state: RenderState, level: usize, mut index: Vec<usize>) -> (RenderState, f64, Vec<usize>){
-        let mut new_offset_y = 0.;
+    fn paint_recursive(&self, cx: &mut PaintCx, elem: &Elem, mut render_state: RenderState, level: usize, mut index: Vec<usize>) -> (RenderState, Vec<usize>){
         match &elem.elem_type {
             ElemType::Block(block) => {
                 if index.len() <= level { index.push(0);}
                 for child in block.children.iter().skip(index[level]) {
-                    //render_state = self.paint_child(cx, child, render_state);
-                    //if render_state.terminate           { return (render_state, elem.point.y, index); }
-                    (render_state, new_offset_y, index) = self.paint_recursive(cx, child, render_state, level + 1, index);
-                    if render_state.terminate           { return (render_state, new_offset_y, index); }
+                    (render_state, index) = self.paint_recursive(cx, child, render_state, level + 1, index);
+                    if render_state.terminate           { return (render_state, index); }
                     index[level] += 1;
                 }
                 if index.len() != 1 { index.pop(); }
@@ -237,19 +208,18 @@ impl HtmlRenderer {
                 let mut dummy_state = render_state.clone();
                 for line in lines.elem_lines.iter() {
                     dummy_state  = self.paint_line(cx, &elem, &line, line_offset_y, dummy_state , false);
-                    if dummy_state .terminate       { return (dummy_state , elem.point.y, index);}
+                    if dummy_state .terminate       { return (dummy_state, index);}
                     line_offset_y += line.height;
                 }
                 line_offset_y = 0.;
                 for line in lines.elem_lines.iter() {
                     render_state  = self.paint_line(cx, &elem, &line, line_offset_y, render_state , true);
-                    if render_state .terminate       { return (render_state , elem.point.y, index);}
+                    if render_state .terminate       { return (render_state, index);}
                     line_offset_y += line.height;
                 }
             }
-        }// SAFETY: We check `initialized[index]` before accessing
-
-        (render_state, new_offset_y, index)
+        }
+        (render_state, index)
     }
 }
 
@@ -262,6 +232,7 @@ impl View for HtmlRenderer {
                     Key::Named(NamedKey::ArrowRight)    => {self.next()},
                     Key::Named(NamedKey::ArrowLeft)     => {self.prev()}
                     Key::Named(NamedKey::ArrowUp)       => {self.goto_last()}
+                    Key::Named(NamedKey::F11)           => {self.id.inspect()}
                     _ => ()
                 }
             }
@@ -273,8 +244,10 @@ impl View for HtmlRenderer {
     fn paint(&mut self, cx: &mut PaintCx) {
         let current_url = self.read_current_url.get();
         //println!("Current url: {current_url}");
+
         let root_elem           = self.pages.get(&current_url).unwrap();
-        let size                = cx.size();
+        let size                = self.id.get_size().unwrap();
+        println!("size: {size}");
         self.col_count          = (size.width / self.col_width).floor();
         self.size               = Size::new(size.width, size.height);
         self.col_gap            = (size.width - self.col_count * self.col_width) / (self.col_count + 1.);
@@ -284,27 +257,25 @@ impl View for HtmlRenderer {
                 let first_elem = root_elem.get_elem(&self.start_index, 0);
                 self.start_offset_y = first_elem.point.y;
             }
-            (_, self.end_offset_y, self.end_index) = self.paint_recursive(cx, root_elem, render_state, 0, self.start_index.clone());
-             //println!("Start index: {:#?}", self.start_index);
-
+            (_, self.end_index) = self.paint_recursive(cx, root_elem, render_state, 0, self.start_index.clone());
+            let last_elem_index = root_elem.get_last_index();
         }
         else {
             let last_elem = root_elem.get_elem(&self.end_index, 0);
-            let content_height      = self.size.height * self.col_count;
-            self.start_offset_y     = last_elem.point.y + last_elem.size.height + 0.0;
-            self.start_offset_y     -= content_height as f64 - 60.;
+            let content_size = self.size.height * self.col_count;
+            self.start_offset_y     = last_elem.point.y + last_elem.size.height - content_size + 20.;
+
             if (self.start_offset_y < 0.) {
                 self.start_index = Vec::new();
                 self.start_offset_y = 0.;
                 self.render_forward = true;
-                (_, self.end_offset_y, self.end_index) = self.paint_recursive(cx, root_elem, render_state, 0, self.start_index.clone());
+                (_, self.end_index) = self.paint_recursive(cx, root_elem, render_state, 0, self.start_index.clone());
                 return;
             }
-            (render_state, _, self.start_index) = self.paint_backward(cx, root_elem, render_state, 0, self.end_index.clone());
-
-           // println!("Start index: {:#?}", self.start_index);
-            //self.render_forward = true;
+            (_, self.start_index) = self.paint_backward(cx, root_elem, render_state, 0, self.end_index.clone());
         }
+
+
     }
     
 }

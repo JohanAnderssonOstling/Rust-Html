@@ -1,19 +1,14 @@
 use std::collections::HashMap;
-use std::mem::MaybeUninit;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
 use std::vec;
+
 use floem::kurbo::{Point, Size};
 use floem::peniko::Image;
-use floem::prelude::editor::layout::TextLayoutLine;
-use floem::views::Decorators;
-use floem_renderer::Img;
-use floem_renderer::text::{Attrs, AttrsList, TextLayout};
-use image::DynamicImage;
+use floem_renderer::text::{Attrs, AttrsList};
 use roxmltree::Node;
-use rustc_data_structures::fx::FxHashMap;
-use sha2::{Digest, Sha256};
+use sha2::Digest;
+
 use crate::glyph_cache::GlyphCache;
 
 static BLOCK_ELEMENTS: [&str; 37] = [
@@ -42,7 +37,9 @@ impl Elem {
         return match &self.elem_type {
             ElemType::Block(block) => {
                 if index.len() == level {return self}
-                let elem = &(block.children[index[level]]);
+                let curr_index = index[level];
+                if curr_index >= block.children.len() {return self}
+                let elem = &(block.children[curr_index]);
                 //if index.len() <= level { return elem; }
                 elem.get_elem(index, level + 1)
             }
@@ -78,7 +75,7 @@ pub struct InlineItem       { size: Size, inline_content: InlineContent }
 pub enum InlineContent      { Text(Vec<CharGlyph>), Image(ImageElem) }
 pub struct CharGlyph        { pub char: char, pub x: f64}
 #[derive(Clone)]
-pub struct ImageElem { pub width: u32, pub height: u32, pub hash: Vec<u8>, pub image_promise: ImagePromise}
+pub struct ImageElem { pub width: u32, pub height: u32, pub image_promise: ImagePromise}
 pub struct BookElemFactory  { 
     pub curr_x: f64, 
     pub curr_y: f64,
@@ -131,9 +128,10 @@ impl BookElemFactory {
         self.base_path = file_path;
             for child in node.children() {
                 if child.tag_name().name().eq("body") {
-                    let mut text_layout = TextLayout::new();
-                    //text_layout.set_text(child.text().unwrap(), AttrsList::new(font));
-                    return self.parse(child, font); }
+                    let block = self.parse(child, font);
+                    let block_type = BlockElem{children: vec![block], total_child_count: 1};
+                    return Elem {size: Size::default(), point: Point::default(), elem_type: ElemType::Block(block_type)}
+                }
             }
         let elem_lines  = ElemLines {height: 0., elem_lines: Vec::new()};
         Elem {size: Size::default(), point: Point::default(), elem_type: ElemType::Lines(elem_lines)}
