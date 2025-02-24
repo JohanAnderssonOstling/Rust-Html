@@ -10,26 +10,33 @@ mod library_page;
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub enum Page { Home, Library, Reader, }
-struct signals {
-    active_page: RwSignal<Page>,
-    prev_page: RwSignal<Page>,
-    epub_path: RwSignal<Page>,
-    library_path: RwSignal<String>,
-    root_library_path: RwSignal<String>,
+#[derive(Clone, Copy)]
+pub struct Signals {
+    pub active_page: RwSignal<Page>,
+    pub prev_page: RwSignal<Page>,
+    pub epub_path: RwSignal<String>,
+    pub library_path: RwSignal<String>,
+    pub root_library_path: RwSignal<String>,
 }
 pub fn page_navigation_view() -> impl View {
-    let (active_page) = create_rw_signal(Page::Home);
+    /*let (active_page) = create_rw_signal(Page::Home);
     let (prev_page, set_prev_page)      = create_signal(Page::Home);
     let (epub_path, set_epub_path) = create_signal("".to_string());
-    let (library_path, set_library_path) = create_signal("".to_string());
-
-
+    let (library_path, set_library_path) = create_signal("".to_string());*/
+    
+    let signals = Signals {
+        active_page     : create_rw_signal(Page::Home),
+        prev_page           : create_rw_signal(Page::Home),
+        epub_path           : create_rw_signal("".to_string()),
+        library_path        : create_rw_signal("".to_string()),
+        root_library_path   : create_rw_signal("".to_string()),
+    };
 
     let content = dyn_view(move ||
-        match active_page.get() {
-        Page::Home      => container(home_view(active_page, set_prev_page, set_epub_path, set_library_path)),
-        Page::Library   => container(library_view(library_path, active_page, set_prev_page, set_epub_path, set_library_path)),
-        Page::Reader    => container(create_epub_reader(epub_path.get().as_str(), library_path.get().as_str(), active_page, prev_page.get()))
+        match signals.active_page.get() {
+        Page::Home      => container(home_view(signals.clone())),
+        Page::Library   => container(library_view(signals.clone())),
+        Page::Reader    => container(create_epub_reader(signals.epub_path.get().as_str(), signals.root_library_path.get().as_str(), signals.prev_page.get(), signals.clone()))
             .style(move |s| s.flex_grow(1.0)),
     }).style(move |s| s.width_full().height_full().flex_grow(1.0));
 

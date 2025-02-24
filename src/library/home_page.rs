@@ -10,14 +10,14 @@ use floem::style::{AlignContent, CursorStyle, Display, FlexWrap, Style};
 use floem::views::dyn_stack;
 use crate::IO::epub::get_epub;
 use crate::IO::home::{create_libraries, delete_library, get_libraries, Library};
-use crate::library::Page;
+use crate::library::{Page, Signals};
 
 
-pub fn home_view(set_active_page: RwSignal<Page>, set_prev_page: WriteSignal<Page>, set_epub_path: WriteSignal<String>, set_library_path: WriteSignal<String>) -> impl View {
+pub fn home_view(signals: Signals) -> impl View {
     let (libraries, set_libraries) = create_signal(get_libraries());
     let stack = dyn_stack(move || libraries.get(),
     move |library| library.clone(),
-    move |library| create_view(library.path, library.book_paths, set_active_page, set_prev_page, set_epub_path, set_library_path) )
+    move |library| create_view(library.path, library.book_paths, signals.clone()) )
         .style(|s| s.flex_row().flex_wrap(FlexWrap::Wrap)
             .justify_start()
             .gap(20.0)
@@ -56,7 +56,7 @@ fn display_files(file: FileInfo) -> String {
     paths.join("\n")
 }
 
-fn create_view(path: String, books: Vec<String>, set_active_page: RwSignal<Page>, set_prev_page: WriteSignal<Page>, set_epub_path: WriteSignal<String>, set_library_path: WriteSignal<String>) -> impl IntoView {
+fn create_view(path: String, books: Vec<String>, signals: Signals) -> impl IntoView {
     let background  = Color::WHITE;
     let hover_color = Color::parse("#f0f0f0").unwrap();
     let box_shadow  = Color::rgba8(0, 0, 0, 25);
@@ -71,9 +71,10 @@ fn create_view(path: String, books: Vec<String>, set_active_page: RwSignal<Page>
 
     let c_header_style = header_style.clone();
     let name_label = label(move || format!("📚 {}", name.clone())).on_click(move |s| {
-        set_prev_page.set(set_active_page.get());
-        set_library_path.set(path.clone());
-        set_active_page.update(|p| *p = Page::Library);
+        signals.prev_page.set(signals.active_page.get());
+        signals.library_path.set(path.clone());
+        signals.root_library_path.set(path.clone());
+        signals.active_page.update(|p| *p = Page::Library);
         EventPropagation::Continue
     }).style(move |s| {header_style.clone()});
 
@@ -86,7 +87,7 @@ fn create_view(path: String, books: Vec<String>, set_active_page: RwSignal<Page>
     let header = h_stack((name_label, hamburger_button));
 
     let book_list = stack_from_iter(books.into_iter()
-        .map(|book| create_book_item(book, library_path.clone(), set_active_page, set_prev_page, set_epub_path, set_library_path)))
+        .map(|book| create_book_item(book, library_path.clone(), signals.clone())))
         .style(move |s| s.flex_col());
 
     container(v_stack((
@@ -99,7 +100,7 @@ fn create_view(path: String, books: Vec<String>, set_active_page: RwSignal<Page>
         .box_shadow_blur(2).box_shadow_color(box_shadow).box_shadow_spread(1)))
 }
 
-fn create_book_item(book: String, library_path: String, set_active_page: RwSignal<Page>, set_prev_page: WriteSignal<Page>, set_epub_path: WriteSignal<String>, set_library_path: WriteSignal<String>) -> impl IntoView {
+fn create_book_item(book: String, library_path: String, signals: Signals) -> impl IntoView {
     let hover_color     = Color::parse("#f0f0f0").unwrap();
     let border_color    = Color::parse("#dddddd").unwrap();
     let book_name       = get_epub(&book);
@@ -112,10 +113,11 @@ fn create_book_item(book: String, library_path: String, set_active_page: RwSigna
             .font_size(16)
             .hover(|s| s.background(hover_color)))
         .on_click(move |click| {
-            set_epub_path.set(book.clone());
-            set_library_path.set(library_path.clone());
-            set_prev_page.set(set_active_page.get());
-            set_active_page.set(Page::Reader);
+            signals.epub_path.set(book.clone());
+            signals.library_path.set(library_path.clone());
+            signals.root_library_path.set(library_path.clone());
+            signals.prev_page.set(signals.active_page.get());
+            signals.active_page.set(Page::Reader);
             EventPropagation::Continue
         })
 }

@@ -1,3 +1,4 @@
+use std::fs;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Cursor, Read, Write};
 use image::DynamicImage;
@@ -56,6 +57,8 @@ fn get_cover(epub:&Epub) -> Option<Vec<u8>> {
     //Some(ImageReader::with_format(Cursor::new(image_bytes), image_type.unwrap()).decode().unwrap())
     Some(image_bytes)
 }
+
+
 
 pub fn remove_dtd(xml: &String) -> String {
     let regex = Regex::new(r#"<!DOCTYPE[^>]*>"#).unwrap();

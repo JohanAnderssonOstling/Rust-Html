@@ -23,6 +23,42 @@ pub fn get_library(path: &str) -> (Vec<String>, Vec<String>) {
         .partition_map(|either| either)
 }
 
+pub fn write_book_position(lib_path: &str, id: &str, section_index: usize, elem_index: Vec<usize>) {
+    let write_path  = format!("{}/.bookrium/positions/{}", lib_path, id);
+
+    println!("Write path: {write_path}");
+    let mut position    = section_index.to_string();
+    position.push('\n');
+    for elem in elem_index {
+        position.push_str(&elem.to_string());
+        position.push('\n');
+    }
+    fs::write(write_path, position).unwrap()
+}
+
+pub fn read_book_position(lib_path: &str, id: &str) -> (usize, Vec<usize>) {
+    let pos_dir     = format!("{lib_path}/.bookrium/positions");
+    let pos_path    = format!("{pos_dir}/{id}");
+    fs::create_dir_all(&pos_dir).unwrap();
+    match fs::read_to_string(pos_path.clone()) {
+        Ok(position)   => {
+
+            let mut lines = position.lines();
+            let section_index: usize = lines.next().unwrap().parse().unwrap();
+            let mut elem_index: Vec<usize> = Vec::new();
+            for line in lines {
+                elem_index.push(line.parse().unwrap());
+            }
+            (section_index, elem_index)
+        }
+        Err(_)      => {
+            File::create(pos_path).unwrap();
+            write_book_position(lib_path, id, 0, Vec::new());
+            (0,Vec::new())
+        }
+    }
+}
+
 pub fn update_book_path(library_path: &str, id: &str, book_path: &str) {
     let path_dir    = format!("{library_path}/.bookrium/book_paths");
     let write_path  = format!("{path_dir}/{id}.txt");

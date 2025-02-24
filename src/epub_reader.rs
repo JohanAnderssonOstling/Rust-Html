@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::{Arc, RwLock};
-
+use std::vec;
 use floem::{IntoView, View, ViewId};
 use floem::event::EventPropagation;
 use floem::peniko::{Blob, Format, Image};
@@ -21,17 +21,19 @@ use threadpool::ThreadPool;
 use crate::book_elem::{BookElemFactory, Elem, ImageElem, ImagePromise};
 use crate::glyph_cache::GlyphCache;
 use crate::html_renderer::HtmlRenderer;
-use crate::IO::epub::remove_dtd;
-use crate::IO::library::{update_book_path, update_last_read};
-use crate::library::Page;
+use crate::IO::epub::{remove_dtd};
+use crate::IO::library::{read_book_position, update_book_path, update_last_read, write_book_position};
+use crate::library::{Page, Signals};
 
-pub fn create_epub_reader(path: &str, library_path: &str, set_current_page: RwSignal<Page>, prev_page: Page) -> impl View {
-    let start_index: Vec<usize> = Vec::new();
-    let start_index_signal = create_rw_signal(start_index);
+pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signals: Signals) -> impl View {
     let epub = Epub::new(path).unwrap();
     let id = epub.metadata().unique_identifier().unwrap().value();
+    let position = read_book_position(library_path, id);
+    let start_index_signal = create_rw_signal(position.1);
+
     update_last_read(library_path, id);
     update_book_path(library_path, id, path);
+    println!("OPening epub");
 
     let sections: Vec<String> = epub.spine().elements().iter()
         .map(|elem| epub.manifest().by_id(elem.name()).unwrap().value().to_string()).collect();
@@ -43,10 +45,10 @@ pub fn create_epub_reader(path: &str, library_path: &str, set_current_page: RwSi
 
     let base_font = Attrs::new().font_size(20.).family(&[FamilyOwned::Serif]).line_height(LineHeightValue::Normal(1.4));
     let cache = GlyphCache::new();
-    
+
     /*let cleaned_files: Vec<String> = html_text.par_iter()
         .map(|section| remove_dtd(section)).collect();*/
-    
+
     let documents: Vec<Document> = html_text.par_iter()
         .map(|section| Document::parse(&section).unwrap()).collect();
     let mut book_factory = BookElemFactory::new(cache, image_map);
@@ -60,20 +62,27 @@ pub fn create_epub_reader(path: &str, library_path: &str, set_current_page: RwSi
     let (get_at_end, set_at_end)        = create_signal(0);
     let (current_url, set_current_url)  = create_signal(sections[0].clone());
     let (get_go_on, set_go_on)          = create_signal(false);
-    let section_index                   = create_rw_signal(0);
+    let section_index                   = create_rw_signal(position.0);
 
-    let mut html_renderer = HtmlRenderer::new(book_factory.cache, pages, current_url, set_at_end, get_go_on);
+    let mut html_renderer = HtmlRenderer::new(start_index_signal, book_factory.cache, pages, current_url, set_at_end, get_go_on);
     html_renderer = html_renderer.style(|style| style.flex_grow(1.0).margin(40));
 
     let back_button = button(label(move || { "Back" }))
         .on_click(move |_| {
-            set_current_page.set(prev_page);
+            signals.active_page.set(prev_page);
             EventPropagation::Continue
         });
-    
+
     let top_panel = h_stack((back_button, )).style(move |s| s.height(20).border_bottom(1));
-    
+
     let stack= v_stack((top_panel, html_renderer)).style(move |s| s.flex_grow(1.0));
+    let lib_path = library_path.to_string();
+    let id = id.to_string();
+    create_effect(move |_| {
+       let start_index = start_index_signal.get();
+        write_book_position(&lib_path, &id, section_index.get(), start_index);
+    });
+
 
     create_effect(move |_| {
         let at_ends = get_at_end.get();
@@ -127,7 +136,7 @@ fn process_images(epub: &Epub) -> HashMap<String, ImageElem> {
         let image_size  = ImageReader::with_format(Cursor::new(&image_bytes), image_type).into_dimensions().unwrap();
         let width       = image_size.0;
         let height      = image_size.1;
-        
+
         let image_promise: ImagePromise = Arc::new(RwLock::new(None));
         let image = ImageElem { width, height, image_promise: image_promise.clone() };
         image_map.insert(image_path.to_string(), image);
