@@ -19,7 +19,6 @@ pub fn library_view(library_path: ReadSignal<String>, set_active_page: RwSignal<
     let back_button = button(label(move || {"Back"}))
         .on_click(move |_| {
             let library_path = library_path.get();
-            println!("{root_library_path}");
             if library_path.eq(&root_library_path) {
                 set_active_page.set(Page::Home);
                 return EventPropagation::Continue

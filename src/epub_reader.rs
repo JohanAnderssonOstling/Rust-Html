@@ -22,12 +22,16 @@ use crate::book_elem::{BookElemFactory, Elem, ImageElem, ImagePromise};
 use crate::glyph_cache::GlyphCache;
 use crate::html_renderer::HtmlRenderer;
 use crate::IO::epub::remove_dtd;
+use crate::IO::library::{update_book_path, update_last_read};
 use crate::library::Page;
 
-pub fn create_epub_reader(path: &str, set_current_page: RwSignal<Page>, prev_page: Page) -> impl View {
+pub fn create_epub_reader(path: &str, library_path: &str, set_current_page: RwSignal<Page>, prev_page: Page) -> impl View {
     let start_index: Vec<usize> = Vec::new();
     let start_index_signal = create_rw_signal(start_index);
     let epub = Epub::new(path).unwrap();
+    let id = epub.metadata().unique_identifier().unwrap().value();
+    update_last_read(library_path, id);
+    update_book_path(library_path, id, path);
 
     let sections: Vec<String> = epub.spine().elements().iter()
         .map(|elem| epub.manifest().by_id(elem.name()).unwrap().value().to_string()).collect();

@@ -1,10 +1,13 @@
 use std::fs::File;
-use std::io::{BufReader, Cursor};
+use std::io::{BufReader, BufWriter, Cursor, Read, Write};
 use image::DynamicImage;
-use zip::ZipArchive;
+use zip::{ZipArchive, ZipWriter};
 use image::io::Reader as ImageReader;
 use rbook::{Ebook, Epub};
 use regex::Regex;
+use zip::result::ZipResult;
+use uuid::{uuid, Uuid};
+use zip::write::{ FileOptions};
 use crate::IO::util::get_image_type;
 
 #[derive(Clone)]
@@ -54,21 +57,10 @@ fn get_cover(epub:&Epub) -> Option<Vec<u8>> {
     Some(image_bytes)
 }
 
-pub fn get_epub_uuid(path: &str) {
-    let zip_file = File::open(path).unwrap();
-    let mut zip = ZipArchive::new(BufReader::new(zip_file)).unwrap();
-
-}
-
-pub fn get_epub_title(path: &str) {
-    let zip_file = File::open(path).unwrap();
-    let mut zip = ZipArchive::new(BufReader::new(zip_file)).unwrap();
-
-}
-
 pub fn remove_dtd(xml: &String) -> String {
     let regex = Regex::new(r#"<!DOCTYPE[^>]*>"#).unwrap();
     let cleaned = regex.replace(&xml, "").to_string();
     println!("{cleaned}");
     cleaned
 }
+

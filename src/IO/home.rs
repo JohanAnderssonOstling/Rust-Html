@@ -2,12 +2,37 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use csv::Reader;
+use csv::{Reader, WriterBuilder};
 use walkdir::WalkDir;
 
 const CSV_PATH: &str = "/home/johan/.local/share/bookrium/home.csv";
 
+
+#[derive(Clone, Eq, Hash, PartialEq)]
 pub struct Library { pub path: String, pub book_paths: Vec<String> }
+
+pub fn create_libraries(path: &str) {
+    let file            = OpenOptions::new().create(true).append(true).open(CSV_PATH).unwrap();
+    let mut writer      = WriterBuilder::new().has_headers(false).from_writer(file);
+    writer.serialize(path).unwrap();
+    writer.flush().unwrap();
+}
+
+pub fn delete_library(library_path: &str) {
+    let delete_path     = format!("{library_path}/.bookrium");
+    let mut reader      = Reader::from_path(CSV_PATH).unwrap();
+    let libs: Vec<String> = reader.deserialize().map(|result| result.unwrap()).collect();
+    let mut writer      = WriterBuilder::new()
+        .has_headers(true).from_writer(OpenOptions::new()
+        .create(true).truncate(true).write(true).open(CSV_PATH).unwrap());
+
+    writer.serialize("path").unwrap();
+    for library in libs {
+        if library_path == library  { fs::remove_dir_all(&delete_path).unwrap() }
+        else                        { writer.serialize(library).unwrap() }
+    }
+    writer.flush().unwrap()
+}
 
 pub fn get_libraries() -> Vec<Library> {
     Reader::from_path(CSV_PATH).unwrap().deserialize()
