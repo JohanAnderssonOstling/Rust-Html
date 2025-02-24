@@ -247,7 +247,6 @@ impl View for HtmlRenderer {
 
         let root_elem           = self.pages.get(&current_url).unwrap();
         let size                = self.id.get_size().unwrap();
-        println!("size: {size}");
         self.col_count          = (size.width / self.col_width).floor();
         self.size               = Size::new(size.width, size.height);
         self.col_gap            = (size.width - self.col_count * self.col_width) / (self.col_count + 1.);
@@ -258,7 +257,6 @@ impl View for HtmlRenderer {
                 self.start_offset_y = first_elem.point.y;
             }
             (_, self.end_index) = self.paint_recursive(cx, root_elem, render_state, 0, self.start_index.clone());
-            let last_elem_index = root_elem.get_last_index();
         }
         else {
             let last_elem = root_elem.get_elem(&self.end_index, 0);
