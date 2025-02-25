@@ -1,14 +1,17 @@
+use std::fmt::format;
 use std::path::Display;
+use std::rc::Rc;
+use std::time::Instant;
 use floem::{IntoView, View};
 use floem::event::EventPropagation;
 use floem::peniko::Color;
-use floem::prelude::{button, Decorators, h_stack, label, RwSignal, ScrollExt, SignalGet, SignalUpdate, v_stack};
+use floem::prelude::{button, Decorators, h_stack, label, RwSignal, ScrollExt, SignalGet, SignalUpdate, Stack, v_stack};
 use floem::reactive::{ReadSignal, WriteSignal};
 use floem::style::{CursorStyle, FlexWrap};
 use floem::views::{dyn_view, img, stack, stack_from_iter};
 use image::DynamicImage;
 use rayon::*;
-use rayon::iter::ParallelIterator;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rayon::prelude::IntoParallelRefIterator;
 use crate::IO::epub::{Book, get_book_cover};
 use crate::IO::library::get_library;
@@ -19,7 +22,6 @@ pub fn library_view(signals: Signals) -> impl View{
     //signals.root_library_path.set((root_library_path.clone()));
     let back_button = button(label(move || {"Back"}))
         .on_click(move |_| {
-            println!("{root_library_path}");
             let library_path = signals.library_path.get();
             if library_path.eq(&root_library_path) {
                 signals.active_page.set(Page::Home);
@@ -34,44 +36,65 @@ pub fn library_view(signals: Signals) -> impl View{
     let top_panel = h_stack((back_button, )).style(move |s| s.height(20).border_bottom(1));
 
     let main_view = dyn_view(move ||
-        dir_view(&signals.library_path.get(), signals.clone())
+        dir_view(&signals.library_path.get(), &signals.root_library_path.get(), signals.clone())
     );
     v_stack((top_panel, main_view)).style(move |s| s.flex_grow(1.0)).scroll()
 }
 
 
-pub fn dir_view(library_path: &str, signals: Signals) -> impl View{
-    let (book_paths, dirs) = get_library(library_path);
-    let books: Vec<Book> = book_paths.par_iter()
-        .map(|book_path| get_book_cover(book_path))
-        .collect();
+pub fn dir_view(library_path: &str, root_library_path: &str, signals: Signals) -> impl View{
 
-    let book_stack = stack_from_iter(books.into_iter().zip(book_paths)
-        .map(|book_cover| create_book_cover(book_cover.0.title, book_cover.0.cover, book_cover.1, signals.clone()) )
+    let (book_paths, dirs) = get_library(library_path);
+    let now = Instant::now();
+    let books: Vec<Book> = book_paths.iter()
+        .map(|book_path| get_book_cover(root_library_path, book_path))
+        .collect();
+    let image_loading_time = now.elapsed();
+    let now = Instant::now();
+
+    /*let book_covers: Vec<Stack> = books.into_par_iter()
+        .map(|book_cover| create_book_cover(book_cover.title, (book_cover.cover.unwrap()), book_cover.path, signals.clone()
+    )).collect();
+
+    println!("Finished covers");
+
+    let book_stack = stack_from_iter(book_covers.into_iter()
+        .map(|book_cover| book_cover.into_view())
+    ).style(move |s| s.gap(20).flex_row().flex_wrap(FlexWrap::Wrap));*/
+    let book_stack = stack_from_iter(books.into_iter()
+        .map(|book_cover| create_book_cover(book_cover.title, book_cover.cover.unwrap(), book_cover.path, signals.clone()) )
     ).style(move |s| s.gap(20).flex_row().flex_wrap(FlexWrap::Wrap));
+    
+    let image_decoding_time = now.elapsed();
 
     let dir_stack = stack_from_iter(dirs.into_iter()
         .map(|dir| create_dir_cover(dir, signals.library_path)))
         .style(move |s| s.gap(20).flex_row().flex_wrap(FlexWrap::Wrap));
 
-    v_stack((book_stack, dir_stack)).style(move |s| s.margin(20))
+    let diagnostic_stack = h_stack((
+        label(move || format!("Image loading: {} ms ", image_loading_time.as_millis())),
+        label(move || format!("Image decoding: {} ms ",image_decoding_time.as_millis())),
+
+    ));
+
+    v_stack((diagnostic_stack, book_stack, dir_stack)).style(move |s| s.margin(20))
         .into_view()
 }
 
-fn create_book_cover(title: String, cover: Option<Vec<u8>>, path: String, signals: Signals) -> impl View {
+fn create_book_cover(title: String, cover: Vec<u8>, path: String, signals: Signals) -> Stack {
     let title_label = label(move || title.clone()).style(|s| s
         .width(300).font_size(16).text_ellipsis());
-    let cover_image = img(move || cover.clone().unwrap())
+    let cover_image = img(move || cover.clone())
         .on_click(move |s| {
             signals.prev_page.set(Page::Library);
-            signals.epub_path.set(path.clone());
+            signals.epub_path.set(path.to_string());
             signals.active_page.set(Page::Reader);
             EventPropagation::Continue
         })
         .style(move |s| s.width(300).height(500)
             .cursor(CursorStyle::Pointer)
             .border_radius(15));
-    v_stack((cover_image, title_label)).into_view()
+    v_stack((cover_image, title_label))
 }
 
 fn create_dir_cover(dir: String, set_library_path: RwSignal<String>) -> impl View{

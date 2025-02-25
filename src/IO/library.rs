@@ -1,4 +1,5 @@
-use std::fs;
+use std::fmt::format;
+use std::{fs, io};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use itertools::{Either, Itertools};
@@ -23,10 +24,15 @@ pub fn get_library(path: &str) -> (Vec<String>, Vec<String>) {
         .partition_map(|either| either)
 }
 
-pub fn write_book_position(lib_path: &str, id: &str, section_index: usize, elem_index: Vec<usize>) {
-    let write_path  = format!("{}/.bookrium/positions/{}", lib_path, id);
+pub fn get_thumbnail(lib_path: &str, id: &str) -> io::Result<Vec<u8>,>{
+    let thumbnail_dir = format!("{lib_path}/.bookrium/thumbnails");
+    let thumbnail_path = format!("{thumbnail_dir}/{id}.jpg");
+    fs::create_dir_all(&thumbnail_dir).unwrap();
+    fs::read(thumbnail_path)
+}
 
-    println!("Write path: {write_path}");
+pub fn write_book_position(lib_path: &str, id: &str, section_index: usize, elem_index: Vec<usize>) {
+    let write_path      = format!("{}/.bookrium/positions/{}", lib_path, id);
     let mut position    = section_index.to_string();
     position.push('\n');
     for elem in elem_index {
@@ -36,13 +42,17 @@ pub fn write_book_position(lib_path: &str, id: &str, section_index: usize, elem_
     fs::write(write_path, position).unwrap()
 }
 
+pub fn write_thumbnail(lib_path: &str, id: &str, thumbnail: Vec<u8>) {
+    let thumbnail_path = format!("{lib_path}/.bookrium/thumbnails/{id}.jpg");
+    fs::write(thumbnail_path, &thumbnail).unwrap()
+}
+
 pub fn read_book_position(lib_path: &str, id: &str) -> (usize, Vec<usize>) {
     let pos_dir     = format!("{lib_path}/.bookrium/positions");
     let pos_path    = format!("{pos_dir}/{id}");
     fs::create_dir_all(&pos_dir).unwrap();
     match fs::read_to_string(pos_path.clone()) {
         Ok(position)   => {
-
             let mut lines = position.lines();
             let section_index: usize = lines.next().unwrap().parse().unwrap();
             let mut elem_index: Vec<usize> = Vec::new();
@@ -68,7 +78,6 @@ pub fn update_book_path(library_path: &str, id: &str, book_path: &str) {
 
 pub fn update_last_read(library_path: &str, id: &str) {
     let last_read_path  = format!("{library_path}/.bookrium/last_read.txt");
-    println!("{last_read_path}");
     let reader          = BufReader::new(File::open(&last_read_path).unwrap());
     let mut hashes: Vec<String> = reader.lines()
         .map(|e| e.unwrap()).take(20)
