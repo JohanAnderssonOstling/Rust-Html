@@ -40,8 +40,8 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
     let html_text: Vec<String> = epub.reader().iter()
         .map(|cont| cont.unwrap().to_string()).collect();
 
-    //let image_map = process_images(&epub);
-    let image_map: HashMap<String, ImageElem> = HashMap::new();
+    let image_map = process_images(&epub);
+    //let image_map: HashMap<String, ImageElem> = HashMap::new();
 
     let base_font = Attrs::new().font_size(20.).family(&[FamilyOwned::Serif]).line_height(LineHeightValue::Normal(1.4));
     let cache = GlyphCache::new();
@@ -60,9 +60,10 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
         pages.insert(url, elem);
     }
     let (get_at_end, set_at_end)        = create_signal(0);
-    let (current_url, set_current_url)  = create_signal(sections[0].clone());
     let (get_go_on, set_go_on)          = create_signal(false);
     let section_index                   = create_rw_signal(position.0);
+    let (current_url, set_current_url)  = create_signal(sections[position.0].clone());
+
 
     let mut html_renderer = HtmlRenderer::new(start_index_signal, book_factory.cache, pages, current_url, set_at_end, get_go_on);
     html_renderer = html_renderer.style(|style| style.flex_grow(1.0).margin(40));
@@ -119,10 +120,12 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
 fn process_images(epub: &Epub) -> HashMap<String, ImageElem> {
     let mut image_map: HashMap<String, ImageElem> = HashMap::new();
     let pool = ThreadPool::new(8);
-    let image_types = ["jpeg", "png", "gif", "webp"];
+    let image_types = ["jpeg", "jpg", "png", "gif", "webp"];
 
     for elem in epub.manifest().elements() {
+        
         let image_path      = elem.value();
+        println!("image path: {image_path}");
         let file_extension  = image_path.split(".").skip(1).next().unwrap();
         if !image_types.contains(&file_extension) { continue; }
         let image_type = match file_extension {
@@ -130,6 +133,7 @@ fn process_images(epub: &Epub) -> HashMap<String, ImageElem> {
             "jpg"   => ImageFormat::Jpeg,
             "png"   => ImageFormat::Png,
             "gif"   => ImageFormat::Gif,
+            "webp"  => ImageFormat::WebP,
             _       => continue
         };
         let image_bytes = epub.read_bytes_file(image_path).unwrap();

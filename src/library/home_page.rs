@@ -25,15 +25,7 @@ pub fn home_view(signals: Signals) -> impl View {
             .align_content(Some(AlignContent::FlexStart))
             //.justify_content(Some(JustifyContent::Center))
             .display(Display::Flex));
-    /*let stack = stack_from_iter(libraries.get().into_iter()
-        .map(|library| create_view(library.path, library.book_paths, set_active_page, set_prev_page, set_epub_path, set_library_path)))
-        .style(|s| s.flex_row().flex_wrap(FlexWrap::Wrap)
-            .justify_start()
-            .gap(20.0)
-            .margin(20)
-            .align_content(Some(AlignContent::FlexStart))
-            //.justify_content(Some(JustifyContent::Center))
-            .display(Display::Flex));*/
+
     let add_button = button(label(move || "Add library"))
         .on_click(move |s| {
             open_file(FileDialogOptions::new().select_directories().title("Select Folder")
@@ -105,7 +97,7 @@ fn create_book_item(book: String, library_path: String, signals: Signals) -> imp
     let border_color    = Color::parse("#dddddd").unwrap();
     let book_name       = get_epub(&book);
     label(move || format!("📖 {book_name}"))
-        .style(move |s| s.padding(5.0)
+        .style(move |s| s.padding(15.0)
             .border_bottom(1)
             .border_color(border_color)
             .cursor(CursorStyle::Pointer)

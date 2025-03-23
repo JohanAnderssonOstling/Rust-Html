@@ -37,8 +37,8 @@ pub fn library_view(signals: Signals) -> impl View{
 
     let main_view = dyn_view(move ||
         dir_view(&signals.library_path.get(), &signals.root_library_path.get(), signals.clone())
-    );
-    v_stack((top_panel, main_view)).style(move |s| s.flex_grow(1.0)).scroll()
+    ).scroll().style(move |s| s.height_full().flex_grow(1.0));
+    v_stack((top_panel, main_view))
 }
 
 
@@ -46,44 +46,45 @@ pub fn dir_view(library_path: &str, root_library_path: &str, signals: Signals) -
 
     let (book_paths, dirs) = get_library(library_path);
     let now = Instant::now();
-    let books: Vec<Book> = book_paths.iter()
+    let books: Vec<Book> = book_paths.par_iter()
         .map(|book_path| get_book_cover(root_library_path, book_path))
         .collect();
     let image_loading_time = now.elapsed();
     let now = Instant::now();
 
-    /*let book_covers: Vec<Stack> = books.into_par_iter()
-        .map(|book_cover| create_book_cover(book_cover.title, (book_cover.cover.unwrap()), book_cover.path, signals.clone()
-    )).collect();
-
-    println!("Finished covers");
-
-    let book_stack = stack_from_iter(book_covers.into_iter()
-        .map(|book_cover| book_cover.into_view())
-    ).style(move |s| s.gap(20).flex_row().flex_wrap(FlexWrap::Wrap));*/
     let book_stack = stack_from_iter(books.into_iter()
-        .map(|book_cover| create_book_cover(book_cover.title, book_cover.cover.unwrap(), book_cover.path, signals.clone()) )
-    ).style(move |s| s.gap(20).flex_row().flex_wrap(FlexWrap::Wrap));
-    
+        .map(|book_cover| create_book_cover(book_cover.title, book_cover.cover, book_cover.path, signals.clone()) )
+    ).style(move |s| s.gap(20).flex_row().flex_wrap(FlexWrap::Wrap).flex_grow(1.0));
+
+    let book_stack_id = book_stack.id();
     let image_decoding_time = now.elapsed();
 
     let dir_stack = stack_from_iter(dirs.into_iter()
         .map(|dir| create_dir_cover(dir, signals.library_path)))
-        .style(move |s| s.gap(20).flex_row().flex_wrap(FlexWrap::Wrap));
+        .style(move |s| s.gap(20).flex_row().flex_wrap(FlexWrap::Wrap).size_full());
 
     let diagnostic_stack = h_stack((
         label(move || format!("Image loading: {} ms ", image_loading_time.as_millis())),
         label(move || format!("Image decoding: {} ms ",image_decoding_time.as_millis())),
-
+        button(label(move || "Diagnostic")).on_click(move |s| {
+            book_stack_id.inspect();
+            EventPropagation::Continue
+        }),
     ));
 
-    v_stack((diagnostic_stack, book_stack, dir_stack)).style(move |s| s.margin(20))
+    v_stack((diagnostic_stack, book_stack, dir_stack))
+        .style(move |s| s.margin(20))
+        .scroll()
         .into_view()
 }
 
-fn create_book_cover(title: String, cover: Vec<u8>, path: String, signals: Signals) -> Stack {
+fn create_book_cover(title: String, cover: Option<Vec<u8>>, path: String, signals: Signals) -> Stack {
     let title_label = label(move || title.clone()).style(|s| s
         .width(300).font_size(16).text_ellipsis());
+    let cover = match cover {
+        None => {Vec::new()}
+        Some(cover) => {cover}
+    };
     let cover_image = img(move || cover.clone())
         .on_click(move |s| {
             signals.prev_page.set(Page::Library);

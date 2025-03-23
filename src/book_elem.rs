@@ -111,8 +111,6 @@ impl BookElemFactory {
                 elem_lines          = self.add_line(curr_line, elem_lines);
                 curr_line           = ElemLine {height: 0., inline_elems: Vec::new()};
             }
-
-
             curr_line.height    = f64::max(curr_line.height, inline_item.size.height);
             let inline_elem     = InlineElem {x: self.curr_x, inline_content: inline_item.inline_content};
             self.curr_x         += inline_item.size.width;
@@ -160,7 +158,7 @@ impl BookElemFactory {
                 block_elem.add_child(self.parse(child, font));
             }
             else if tag_name.eq("")     { inline_items.extend(self.parse_text(child, attrs_list.clone())); }
-            //else if tag_name.eq("img")  { inline_items.push(self.parse_img(child));}
+            else if tag_name.eq("img")  { inline_items.push(self.parse_img(child));}
             else if tag_name.eq("br") {
                 block_elem.add_child(self.layout_elem_lines(inline_items, 600.));
                 inline_items = Vec::new();
@@ -187,13 +185,12 @@ impl BookElemFactory {
         let mut inline_items: Vec<InlineItem> = Vec::new();
         if node.text().unwrap().eq("\n") {return Vec::new()}
         for word in node.text().unwrap().split_whitespace() {
-            let mut char_x = 0.;
+            let mut char_x  = 0.;
             let word_height = 24.;
             let chars = word.chars();
             let mut char_glyphs: Vec<CharGlyph> = Vec::with_capacity(word.len());
 
             for char in chars {
-                //println!("{}", char as u32);
                 char_glyphs.push(CharGlyph {char, x: char_x});
                 let text_layout = self.cache.get_or_insert(char, &attrs_list);
                 char_x += text_layout.size().width;
@@ -206,11 +203,11 @@ impl BookElemFactory {
     }
     
     pub fn parse_img(&self, node: Node) -> InlineItem {
-        let relative_path = node.attribute("src").unwrap();
-        let image_path = resolve_path(&self.base_path, relative_path);
-        println!("IMAGEPATH: {relative_path} \n\n {image_path}");
-        let image = self.images.get(&image_path).unwrap();
-        let size = Size::new(image.width as f64, image.height as f64);
+        let relative_path   = node.attribute("src").unwrap();
+        let image_path      = resolve_path(&self.base_path, relative_path);
+        println!("{image_path}");
+        let image           = self.images.get(&image_path).unwrap();
+        let size            = Size::new(image.width as f64, image.height as f64);
         InlineItem {size, inline_content: InlineContent::Image(image.clone())}
     }
 }

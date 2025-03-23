@@ -7,6 +7,7 @@ use crate::library::library_page::library_view;
 
 pub mod home_page;
 mod library_page;
+mod components;
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub enum Page { Home, Library, Reader, }

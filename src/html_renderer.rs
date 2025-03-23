@@ -145,7 +145,7 @@ impl HtmlRenderer {
                         match image_promise.deref() {
                             None => {}
                             Some(image) => {
-                                let rect = Rect::new(0., 0., 200., 200.);
+                                let rect = Rect::new(line_point.x, line_point.y, line_point.x + image_elem.width as f64, line_point.y + image_elem.height as f64);
                                 let img = Img {img: image.0.clone(), hash: &image.1};
                                 cx.draw_img(img, rect);
                             }
@@ -162,11 +162,11 @@ impl HtmlRenderer {
         match &elem.elem_type {
             ElemType::Block(block) => {
                 let mut elem_index = 0;
-                if self.end_index.len() > level { elem_index = self.end_index[level]; }
+                //if self.end_index.len() > level { elem_index = self.end_index[level]; }
                 if block.children.len() == 0 {return (render_state, index)}
                 if index.len() <= level { index.push(block.children.len() - 1); }
                 let mut last_index = index.clone();
-                for child in block.children.iter().take(elem_index + 1).rev() {
+                for child in block.children.iter().take(index[level] + 1).rev() {
                     last_index = index.clone();
                     (render_state, index) = self.paint_backward(cx, child, render_state, level + 1, index);
                     if render_state.terminate           {return (render_state, index); }
@@ -178,15 +178,17 @@ impl HtmlRenderer {
                 let mut line_offset_y = elem.size.height;
                 let mut dummy_state = render_state.clone();
                 for line in lines.elem_lines.iter().rev() {
+                    line_offset_y -= line.height;
+
                     dummy_state  = self.paint_line(cx, &elem, &line, line_offset_y, dummy_state , false);
                     if dummy_state .terminate       { return (dummy_state, index);}
-                    line_offset_y -= line.height;
                 }
                 line_offset_y = elem.size.height;
                 for line in lines.elem_lines.iter().rev() {
+                    line_offset_y -= line.height;
+
                     render_state = self.paint_line(cx, &elem, &line, line_offset_y, render_state, true);
                     if render_state.terminate {return (render_state, index)}
-                    line_offset_y -= line.height;
                 }
             }
         }
@@ -243,9 +245,7 @@ impl View for HtmlRenderer {
         EventPropagation::Continue
     }
     fn paint(&mut self, cx: &mut PaintCx) {
-        let current_url = self.read_current_url.get();
-        //println!("Current url: {current_url}");
-
+        let current_url         = self.read_current_url.get();
         let root_elem           = self.pages.get(&current_url).unwrap();
         let size                = self.id.get_size().unwrap();
         self.col_count          = (size.width / self.col_width).floor();
