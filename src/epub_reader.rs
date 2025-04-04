@@ -1,16 +1,19 @@
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 use std::vec;
+use cssparser::ParserState;
 use floem::{IntoView, View, ViewId};
 use floem::event::EventPropagation;
 use floem::peniko::{Blob, Format, Image};
-use floem::prelude::{container, create_rw_signal, create_signal, label, RwSignal, SignalGet, SignalUpdate};
+use floem::prelude::{Color, container, create_rw_signal, create_signal, label, RwSignal, SignalGet, SignalUpdate};
 use floem::reactive::{create_effect, WriteSignal};
 use floem::views::{button, Decorators, h_stack, v_stack};
 use floem_renderer::text::{Attrs, FamilyOwned, LineHeightValue};
 use image::ImageFormat;
 use image::io::Reader as ImageReader;
+use lightningcss::stylesheet::{ParserOptions, StyleSheet};
 use rayon::prelude::*;
 use rayon::prelude::IntoParallelRefIterator;
 use rbook::{Ebook, Epub};
@@ -18,8 +21,8 @@ use roxmltree::Document;
 use sha2::{Digest, Sha256};
 use threadpool::ThreadPool;
 
-use crate::book_elem::{BookElemFactory, Elem, ImageElem, ImagePromise};
-use crate::glyph_cache::GlyphCache;
+use crate::book_elem::{BookElemFactory, Elem, HTMLPage, ImageElem, ImagePromise, ParseState};
+use crate::glyph_interner::GlyphCache;
 use crate::html_renderer::HtmlRenderer;
 use crate::IO::epub::{remove_dtd};
 use crate::IO::library::{read_book_position, update_book_path, update_last_read, write_book_position};
@@ -33,17 +36,23 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
 
     update_last_read(library_path, id);
     update_book_path(library_path, id, path);
-    println!("OPening epub");
 
     let sections: Vec<String> = epub.spine().elements().iter()
         .map(|elem| epub.manifest().by_id(elem.name()).unwrap().value().to_string()).collect();
     let html_text: Vec<String> = epub.reader().iter()
         .map(|cont| cont.unwrap().to_string()).collect();
 
+    let now = Instant::now();
     let image_map = process_images(&epub);
+    println!("Elapsed image processing time: {}", now.elapsed().as_millis());
     //let image_map: HashMap<String, ImageElem> = HashMap::new();
 
-    let base_font = Attrs::new().font_size(20.).family(&[FamilyOwned::Serif]).line_height(LineHeightValue::Normal(1.4));
+    let base_font = Attrs::new()
+        .font_size(20.)
+        .family(&[FamilyOwned::Serif])
+        .line_height(LineHeightValue::Normal(2.0))
+        .color(Color::rgb8(43, 43, 43))
+        ;
     let cache = GlyphCache::new();
 
     /*let cleaned_files: Vec<String> = html_text.par_iter()
@@ -51,18 +60,26 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
 
     let documents: Vec<Document> = html_text.par_iter()
         .map(|section| Document::parse(&section).unwrap()).collect();
-    let mut book_factory = BookElemFactory::new(cache, image_map);
-    let elems: Vec<Elem> = documents.iter().zip(&sections)
-        .map(|document| book_factory.parse_root(document.0.root_element(), base_font, document.1.clone()))
+    let css_strings: Vec<String> = epub.manifest().all_by_media_type("text/css").iter()
+        .map(|css_name| epub.read_file(css_name.value()).unwrap())
         .collect();
-    let mut pages: HashMap<String, Elem> = HashMap::with_capacity(elems.len());
+    let style_sheets: Vec<StyleSheet> = css_strings.iter()
+        .map(|css_string| StyleSheet::parse(css_string, ParserOptions::default()).unwrap())
+        .collect();
+    let now = Instant::now();
+    let mut book_factory = BookElemFactory::new(cache, image_map);
+    let elems: Vec<HTMLPage> = documents.iter().zip(&sections)
+        .map(|document| book_factory.parse_root(document.0.root_element(), base_font, document.1.clone(), &style_sheets))
+        .collect();
+    let mut pages: HashMap<String, HTMLPage> = HashMap::with_capacity(elems.len());
     for (elem, url) in elems.into_iter().zip(sections.clone()) {
         pages.insert(url, elem);
     }
+    println!("Elapsed parsing time: {}", now.elapsed().as_millis());
     let (get_at_end, set_at_end)        = create_signal(0);
     let (get_go_on, set_go_on)          = create_signal(false);
     let section_index                   = create_rw_signal(position.0);
-    let (current_url, set_current_url)  = create_signal(sections[position.0].clone());
+    let (current_url)  = create_rw_signal(sections[position.0].clone());
 
 
     let mut html_renderer = HtmlRenderer::new(start_index_signal, book_factory.cache, pages, current_url, set_at_end, get_go_on);
@@ -87,33 +104,42 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
 
     create_effect(move |_| {
         let at_ends = get_at_end.get();
-
+   
+        
         if (at_ends == -1) || (at_ends == 1) {
-            if at_ends == -1 {
-                section_index.update(|idx| {
+            section_index.update(|idx| {
+                let url = current_url.get_untracked();
+                let mut counter = 0;
+                for section in &sections {
+                    if section.eq(&url) {
+                        *idx = counter;
+                    }
+                    counter += 1;
+                }
+                if at_ends == -1 {
+                
                     if *idx == 0 {
                         set_go_on.set(false);
                         return;
                     }
                     set_go_on.set(true);
                     *idx -= 1;
-                    set_current_url.set(sections[*idx].clone());
-                });
-            }
-            if at_ends == 1 {
-                section_index.update(|idx| {
+                    current_url.set(sections[*idx].clone());
+                
+                }
+                if at_ends == 1 {
                     if *idx == sections.len() - 1 {
                         set_go_on.set(false);
                         return;
                     }
                     set_go_on.set(true);
                     *idx += 1;
-                    set_current_url.set(sections[*idx].clone());
-                });
-            }
+                    current_url.set(sections[*idx].clone());
+                }
+            });
         }
     });
-    container(stack).style(move |s| s.flex_grow(1.0)).into_view()
+    container(stack).style(move |s| s.flex_grow(1.0).background(Color::WHITE)).into_view()
 }
 
 
@@ -125,7 +151,6 @@ fn process_images(epub: &Epub) -> HashMap<String, ImageElem> {
     for elem in epub.manifest().elements() {
         
         let image_path      = elem.value();
-        println!("image path: {image_path}");
         let file_extension  = image_path.split(".").skip(1).next().unwrap();
         if !image_types.contains(&file_extension) { continue; }
         let image_type = match file_extension {
@@ -136,6 +161,7 @@ fn process_images(epub: &Epub) -> HashMap<String, ImageElem> {
             "webp"  => ImageFormat::WebP,
             _       => continue
         };
+
         let image_bytes = epub.read_bytes_file(image_path).unwrap();
         let image_size  = ImageReader::with_format(Cursor::new(&image_bytes), image_type).into_dimensions().unwrap();
         let width       = image_size.0;
@@ -145,6 +171,7 @@ fn process_images(epub: &Epub) -> HashMap<String, ImageElem> {
         let image = ImageElem { width, height, image_promise: image_promise.clone() };
         image_map.insert(image_path.to_string(), image);
         pool.execute(move || {
+            
             let data = Arc::new(ImageReader::with_format(Cursor::new(image_bytes), image_type).decode().unwrap().to_rgba8().into_raw());
             let mut hasher  = Sha256::new();
             let blob        = Blob::new(data.clone());

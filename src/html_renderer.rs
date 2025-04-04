@@ -6,14 +6,16 @@ use floem::context::{EventCx, PaintCx};
 use floem::event::{Event, EventPropagation};
 use floem::keyboard::{Key, NamedKey};
 use floem::kurbo::{Point, Rect, Size};
-use floem::prelude::{RwSignal, SignalUpdate};
+use floem::pointer::PointerInputEvent;
+use floem::prelude::{Color, RwSignal, SignalUpdate};
 use floem::reactive::{ReadSignal, SignalGet, SignalRead, WriteSignal};
 use floem::views::Decorators;
 use floem_renderer::{Img, Renderer};
+use lightningcss::traits::Op;
 use sha2::Digest;
-
-use crate::book_elem::{Elem, ElemLine, ElemType, InlineContent};
-use crate::glyph_cache::GlyphCache;
+use uuid::Version::Random;
+use crate::book_elem::{HTMLPage, Elem, ElemLine, ElemType, InlineContent};
+use crate::glyph_interner::GlyphCache;
 
 #[derive(Clone)]
 struct RenderState {
@@ -26,8 +28,8 @@ struct RenderState {
 pub struct HtmlRenderer {
     id: ViewId,
 
-    read_current_url: ReadSignal<String>,
-    pages: HashMap<String, Elem>,
+    read_current_url: RwSignal<String>,
+    pages: HashMap<String, HTMLPage>,
 
     start_index: RwSignal<Vec<usize>>,
     end_index: Vec<usize>,
@@ -47,58 +49,78 @@ pub struct HtmlRenderer {
     render_forward: bool,
     get_go_on: ReadSignal<bool>,
     at_ends: WriteSignal<i8>,
+
+    click_location: Option<Point>,
 }
 
 impl HtmlRenderer {
 
-    pub fn new(start_index: RwSignal<Vec<usize>>, glyph_cache: GlyphCache, pages: HashMap<String, Elem>, read_current_url: ReadSignal<String>, at_ends: WriteSignal<i8>, get_go_on: ReadSignal<bool>) -> Self{
+    pub fn new(start_index: RwSignal<Vec<usize>>, glyph_cache: GlyphCache, pages: HashMap<String, HTMLPage>, read_current_url: RwSignal<String>, at_ends: WriteSignal<i8>, get_go_on: ReadSignal<bool>) -> Self{
         let mut html_renderer = HtmlRenderer {
             id: ViewId::new(), start_index, end_index: Vec::new(),
-            col_gap: 0., col_width: 600., col_count: 0.
-            , size: Size::default(), start_offset_y: 0., end_offset_y: 0.,
-            render_forward: true, scale: 1.0, orig_col_width: 600., glyph_cache, pages,
-            read_current_url,
-            get_go_on, at_ends
+            col_gap: 0., col_count: 0., col_width: 600., orig_col_width: 600., 
+            size: Size::default(), start_offset_y: 0., end_offset_y: 0.,
+            render_forward: true, scale: 1.0, 
+            glyph_cache, pages,
+            read_current_url, get_go_on, at_ends,
+            click_location: None,
         };
         html_renderer = html_renderer.keyboard_navigable();
-        html_renderer.id.request_focus();
         html_renderer
     }
     
-
     pub fn next(&mut self) {
+        self.render_forward = true;
         if self.end_index.len() != 0 && self.end_index[0] == 1 {
             self.at_ends.set(1);
             if !self.get_go_on.get() {return}
             self.start_index.set(Vec::new());
             self.start_offset_y = 0.;
             self.end_index = Vec::new();
-            self.render_forward = true;
             return;
         }
         self.at_ends.set(0);
         self.start_index.set(self.end_index.clone());
-        self.render_forward = true;
     }
 
     pub fn prev(&mut self ) {
+        self.render_forward = false;
         if self.start_index.get().len() == 0 {
             self.at_ends.set(-1);
             if !self.get_go_on.get() {return}
             self.goto_last();
-            self.render_forward = false;
             return
         }
         self.at_ends.set(0);
-        self.end_index          = self.start_index.get_untracked();
-        self.render_forward = false;
+        self.end_index      = self.start_index.get_untracked();
+    }
+
+    pub fn goto(&self, link: &String) {
+        if link.contains("www") || link.contains("http") {
+            open::that(link);
+            return;
+        }
+        println!("Clicked link: {link}");
+        let current_url = self.read_current_url.get_untracked();
+        let mut paths: Vec<&str> = current_url.split("/").collect();
+        paths.pop().unwrap();
+        let path = paths.join("/");
+        let parts: Vec<&str> = link.split("#").collect();
+        let new_url = format!("{path}/{}", parts[0]);
+        let new_index = parts[1].to_string();
+        let document = &self.pages.get(&new_url).unwrap();
+        self.read_current_url.set(new_url);
+        match document.locations.get(&new_index) {
+            None => {self.start_index.set(Vec::new())}
+            Some(new_index) => {self.start_index.set(new_index.clone())}
+        }
     }
 
     pub fn goto_last(&mut self) {
-        let current_url = self.read_current_url.get();
-        let root_elem = self.pages.get(&current_url).unwrap();
-        let last_index = root_elem.get_last_index();
-        self.end_index = last_index;
+        let current_url     = self.read_current_url.get();
+        let root_elem       = &self.pages.get(&current_url).unwrap().root;
+        let last_index      = root_elem.get_last_index();
+        self.end_index      = last_index;
         self.render_forward = false;
     }
 
@@ -125,35 +147,49 @@ impl HtmlRenderer {
     }
 
     fn paint_line(&self, cx: &mut PaintCx, elem: &Elem, line: &ElemLine, line_offset_y: f64, mut render_state: RenderState, render: bool) -> RenderState {
-        let mut line_point = Point::new(elem.point.x, elem.point.y + line_offset_y);
-        (render_state, line_point) = self.resolve_point(line_point, line.height, render_state);
+        let mut line_point          = Point::new(elem.point.x, elem.point.y + line_offset_y);
+        (render_state, line_point)  = self.resolve_point(line_point, line.height, render_state);
+        if !render {return render_state}
         for elem in line.inline_elems.iter() {
             let elem_point = Point::new(line_point.x + elem.x, line_point.y);
-            cx.set_scale(self.scale);
-            if render {
-                match &elem.inline_content {
-                    InlineContent::Text(text) => {
-                        for char in text {
-                            let glyph = self.glyph_cache.get(char.char).unwrap();
-                            let glyph_point = Point::new(elem_point.x + char.x, elem_point.y);
-                            cx.draw_text(glyph, glyph_point)
-                        }
+            match &elem.inline_content {
+                InlineContent::Text(text) => {
+                    for char_glyph in text {
+                        let glyph = self.glyph_cache.get(char_glyph.char);
+                        cx.draw_text(glyph, Point::new(elem_point.x + char_glyph.x as f64, elem_point.y))
                     }
-                    InlineContent::Image(image_elem) => {
-                        let image_promise = image_elem.image_promise.read().unwrap();
-
-                        match image_promise.deref() {
-                            None => {}
-                            Some(image) => {
-                                let rect = Rect::new(line_point.x, line_point.y, line_point.x + image_elem.width as f64, line_point.y + image_elem.height as f64);
-                                let img = Img {img: image.0.clone(), hash: &image.1};
-                                cx.draw_img(img, rect);
+                }
+                InlineContent::Link((text, link)) => {
+                    for char_glyph in text {
+                        let glyph = self.glyph_cache.get(char_glyph.char);
+                        let x = elem_point.x + char_glyph.x as f64;
+                        cx.draw_text(glyph, Point::new(x, elem_point.y));
+                        let descent = glyph.lines().first().unwrap().layout_opt().as_ref().unwrap().first().as_ref().unwrap().max_descent as f64;
+                        let y = elem_point.y + glyph.size().height - descent;
+                        let x0 = x;
+                        let x1 = x0 + glyph.size().width;
+                        let rect = Rect::new(x0 - 1., y, x1 + 1., y + 2.0);
+                        cx.fill(&rect, Color::DARK_GREEN, 0.);
+                        if let Some(location) = self.click_location {
+                            if x <= location.x && location.x <= x1 && elem_point.y <= location.y && location.y <= elem_point.y + glyph.size().height {
+                                self.goto(link);
                             }
                         }
                     }
                 }
+                InlineContent::Image(image_elem) => {
+                    let image_promise = image_elem.image_promise.read().unwrap();
+                    match image_promise.deref() {
+                        None => {}
+                        Some(image) => {
+                            let rect = Rect::new(line_point.x, line_point.y, line_point.x + image_elem.width as f64, line_point.y + image_elem.height as f64);
+                            let img = Img {img: image.0.clone(), hash: &image.1};
+                            cx.draw_img(img, rect);
+                           // println!("Rendered image: {}", line_point.x);
+                        }
+                    }
+                }
             }
-            cx.set_scale(1.0);
         }
         render_state
     }
@@ -161,32 +197,26 @@ impl HtmlRenderer {
     fn paint_backward(&self, cx: &mut PaintCx, elem: &Elem, mut render_state: RenderState, level: usize, mut index: Vec<usize>) -> (RenderState, Vec<usize>){
         match &elem.elem_type {
             ElemType::Block(block) => {
-                let mut elem_index = 0;
-                //if self.end_index.len() > level { elem_index = self.end_index[level]; }
-                if block.children.len() == 0 {return (render_state, index)}
-                if index.len() <= level { index.push(block.children.len() - 1); }
-                let mut last_index = index.clone();
+                if block.children.len() == 0    { return (render_state, index) }
+                if index.len() <= level         { index.push(block.children.len() - 1); }
                 for child in block.children.iter().take(index[level] + 1).rev() {
-                    last_index = index.clone();
                     (render_state, index) = self.paint_backward(cx, child, render_state, level + 1, index);
-                    if render_state.terminate           {return (render_state, index); }
-                    if index[level] != 0    { index[level] -= 1; }
+                    if render_state.terminate       {return (render_state, index); }
+                    if index[level] != 0            { index[level] -= 1; }
                 }
                 index.pop();
             }
             ElemType::Lines(lines) => {
-                let mut line_offset_y = elem.size.height;
-                let mut dummy_state = render_state.clone();
+                let mut line_offset_y   = elem.size.height;
+                let mut dummy_state     = render_state.clone();
                 for line in lines.elem_lines.iter().rev() {
                     line_offset_y -= line.height;
-
                     dummy_state  = self.paint_line(cx, &elem, &line, line_offset_y, dummy_state , false);
-                    if dummy_state .terminate       { return (dummy_state, index);}
+                    if dummy_state.terminate       { return (dummy_state, index);}
                 }
                 line_offset_y = elem.size.height;
                 for line in lines.elem_lines.iter().rev() {
                     line_offset_y -= line.height;
-
                     render_state = self.paint_line(cx, &elem, &line, line_offset_y, render_state, true);
                     if render_state.terminate {return (render_state, index)}
                 }
@@ -239,33 +269,39 @@ impl View for HtmlRenderer {
                     _ => ()
                 }
             }
+            Event::PointerDown(event) => {
+                self.click_location = Some(event.pos);
+            }
+
+
             _ => ()
         }
         cx.app_state_mut().request_paint(self.id());
         EventPropagation::Continue
     }
+
+
+
     fn paint(&mut self, cx: &mut PaintCx) {
-        let current_url         = self.read_current_url.get();
-        let root_elem           = self.pages.get(&current_url).unwrap();
-        let size                = self.id.get_size().unwrap();
-        self.col_count          = (size.width / self.col_width).floor();
-        self.size               = Size::new(size.width, size.height);
-        self.col_gap            = (size.width - self.col_count * self.col_width) / (self.col_count + 1.);
-        let mut render_state    = RenderState {x: 0., y: 0., col_index: 0., terminate: false};
-        let mut start_index = self.start_index.get_untracked();
+        let root_elem           = &self.pages.get(&self.read_current_url.get()).unwrap().root;
+        self.size               = self.id.get_size().unwrap();
+        self.col_count          = (self.size.width / self.col_width).floor();
+        self.col_gap            = (self.size.width - self.col_count * self.col_width) / (self.col_count + 1.);
+        let render_state        = RenderState {x: 0., y: 0., col_index: 0., terminate: false};
+        let mut start_index     = self.start_index.get_untracked();
         if self.render_forward {
             if start_index.len() != 0 {
-                let first_elem = root_elem.get_elem(&start_index, 0);
+                let first_elem      = root_elem.get_elem(&start_index, 0);
                 self.start_offset_y = first_elem.point.y;
             }
             (_, self.end_index) = self.paint_recursive(cx, root_elem, render_state, 0, start_index);
         }
         else {
-            let last_elem = root_elem.get_elem(&self.end_index, 0);
-            let content_size = self.size.height * self.col_count;
-            self.start_offset_y     = last_elem.point.y + last_elem.size.height - content_size + 20.;
+            let last_elem       = root_elem.get_elem(&self.end_index, 0);
+            let content_size    = self.size.height * self.col_count;
+            self.start_offset_y = last_elem.point.y + last_elem.size.height - content_size + 20.;
 
-            if (self.start_offset_y < 0.) {
+            if self.start_offset_y < 0. {
                 self.start_index.set( Vec::new());
                 self.start_offset_y = 0.;
                 self.render_forward = true;
@@ -275,8 +311,7 @@ impl View for HtmlRenderer {
             (_, start_index) = self.paint_backward(cx, root_elem, render_state, 0, self.end_index.clone());
             self.start_index.set(start_index);
         }
-
-
+        self.click_location = None;
     }
     
 }
