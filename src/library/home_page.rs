@@ -92,6 +92,8 @@ fn create_view(path: String, books: Vec<String>, signals: Signals) -> impl IntoV
         .box_shadow_blur(2).box_shadow_color(box_shadow).box_shadow_spread(1)))
 }
 
+
+
 fn create_book_item(book: String, library_path: String, signals: Signals) -> impl IntoView {
     let hover_color     = Color::parse("#f0f0f0").unwrap();
     let border_color    = Color::parse("#dddddd").unwrap();

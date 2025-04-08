@@ -22,7 +22,7 @@ pub struct Book {
     pub path: String,
 }
 
-pub fn get_epub (path: &str) -> String{
+pub fn get_epub (path: &str) -> String {
     let epub        = Epub::new(&path).unwrap();
     let title       = match epub.metadata().title() {
         None            => {path.split("/").last().unwrap().to_string()}

@@ -12,3 +12,10 @@ pub fn create_label(text: String, font_size: i32) -> Label {
         .font_size(font_size)
     )
 }
+
+pub fn label_style(label: Label, font_size: i32) -> Label {
+    label.style(move |s| s
+        .hover(|s| s.background(HOVER_COLOR))
+        .text_ellipsis()
+        .font_size(font_size))
+}

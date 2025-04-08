@@ -1,20 +1,18 @@
 use std::collections::HashMap;
 use std::ops::Deref;
-
-use floem::{View, ViewId};
+use std::time::Instant;
+use floem::{Clipboard, View, ViewId};
 use floem::context::{EventCx, PaintCx};
 use floem::event::{Event, EventPropagation};
-use floem::keyboard::{Key, NamedKey};
+use floem::keyboard::{Key, Modifiers, NamedKey};
 use floem::kurbo::{Point, Rect, Size};
-use floem::pointer::PointerInputEvent;
 use floem::prelude::{Color, RwSignal, SignalUpdate};
 use floem::reactive::{ReadSignal, SignalGet, SignalRead, WriteSignal};
 use floem::views::Decorators;
 use floem_renderer::{Img, Renderer};
-use lightningcss::traits::Op;
 use sha2::Digest;
-use uuid::Version::Random;
-use crate::book_elem::{HTMLPage, Elem, ElemLine, ElemType, InlineContent};
+
+use crate::book_elem::{Elem, ElemLine, ElemType, HTMLPage, InlineContent};
 use crate::glyph_interner::GlyphCache;
 
 #[derive(Clone)]
@@ -97,19 +95,29 @@ impl HtmlRenderer {
 
     pub fn goto(&self, link: &String) {
         if link.contains("www") || link.contains("http") {
-            open::that(link);
+            open::that(link).unwrap();
             return;
         }
         println!("Clicked link: {link}");
+        let parts: Vec<&str> = link.split("#").collect();
+        let mut new_url = parts[0].to_string();
         let current_url = self.read_current_url.get_untracked();
         let mut paths: Vec<&str> = current_url.split("/").collect();
-        paths.pop().unwrap();
-        let path = paths.join("/");
-        let parts: Vec<&str> = link.split("#").collect();
-        let new_url = format!("{path}/{}", parts[0]);
-        let new_index = parts[1].to_string();
+        if paths.len() > 1 {
+            println!("Len: {}", paths.len());
+            paths.pop().unwrap();
+            let path = paths.join("/");
+            new_url = format!("{path}/{new_url}")
+        }
+        println!("Current url: {current_url}\t New url: {new_url}");
+
         let document = &self.pages.get(&new_url).unwrap();
         self.read_current_url.set(new_url);
+        if parts.len() == 1 {
+            self.start_index.set(Vec::new());
+            return;
+        }
+        let new_index = parts[1].to_string();
         match document.locations.get(&new_index) {
             None => {self.start_index.set(Vec::new())}
             Some(new_index) => {self.start_index.set(new_index.clone())}
@@ -171,7 +179,8 @@ impl HtmlRenderer {
                         let rect = Rect::new(x0 - 1., y, x1 + 1., y + 2.0);
                         cx.fill(&rect, Color::DARK_GREEN, 0.);
                         if let Some(location) = self.click_location {
-                            if x <= location.x && location.x <= x1 && elem_point.y <= location.y && location.y <= elem_point.y + glyph.size().height {
+                            if x <= location.x && location.x <= x1 && elem_point.y <= location.y
+                                && location.y <= elem_point.y + glyph.size().height {
                                 self.goto(link);
                             }
                         }
@@ -180,11 +189,12 @@ impl HtmlRenderer {
                 InlineContent::Image(image_elem) => {
                     let image_promise = image_elem.image_promise.read().unwrap();
                     match image_promise.deref() {
-                        None => {}
+                        None => {println!("Found no image")}
                         Some(image) => {
                             let rect = Rect::new(line_point.x, line_point.y, line_point.x + image_elem.width as f64, line_point.y + image_elem.height as f64);
                             let img = Img {img: image.0.clone(), hash: &image.1};
                             cx.draw_img(img, rect);
+                            cx.draw_text()
                            // println!("Rendered image: {}", line_point.x);
                         }
                     }
@@ -268,27 +278,38 @@ impl View for HtmlRenderer {
                     Key::Named(NamedKey::F11)           => {self.id.inspect()}
                     _ => ()
                 }
+                if event.modifiers.control(){
+                    match event.key.logical_key {
+                        Key::Named(NamedKey::ArrowRight) => {
+                            
+                        }
+                        _ => ()
+                    }
+                }
+                cx.app_state_mut().request_paint(self.id());
+            }
+            Event::PointerWheel(event) => {
+                if event.delta.y > 0.       {self.next()}
+                else if event.delta.y < 0.  {self.prev()}
+                cx.app_state_mut().request_paint(self.id());
+
             }
             Event::PointerDown(event) => {
                 self.click_location = Some(event.pos);
+                cx.app_state_mut().request_paint(self.id());
             }
-
-
             _ => ()
         }
-        cx.app_state_mut().request_paint(self.id());
         EventPropagation::Continue
     }
-
-
-
     fn paint(&mut self, cx: &mut PaintCx) {
+        let now = Instant::now();
         let root_elem           = &self.pages.get(&self.read_current_url.get()).unwrap().root;
         self.size               = self.id.get_size().unwrap();
         self.col_count          = (self.size.width / self.col_width).floor();
         self.col_gap            = (self.size.width - self.col_count * self.col_width) / (self.col_count + 1.);
         let render_state        = RenderState {x: 0., y: 0., col_index: 0., terminate: false};
-        let mut start_index     = self.start_index.get_untracked();
+        let mut start_index     = self.start_index.get();
         if self.render_forward {
             if start_index.len() != 0 {
                 let first_elem      = root_elem.get_elem(&start_index, 0);
@@ -312,6 +333,8 @@ impl View for HtmlRenderer {
             self.start_index.set(start_index);
         }
         self.click_location = None;
+        //println!("Render time: {}", now.elapsed().as_micros())
+
     }
-    
 }
+

@@ -3,11 +3,10 @@ name = "Floem-Epub"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-floem = {version = "0.2.0", features = ["rfd-async-std"]}
-floem_renderer =  { version = "0.2.0"}
+floem = {version = "0.2.0", features = ["rfd-async-std", "default-image-formats", "default", "vello"]}
+floem_renderer = {version = "0.2.0"}
 roxmltree = "0.19.0"
 rbook = "0.5.0"
 image = "0.24.9"
@@ -24,6 +23,5 @@ zip = "0.6.3"
 regex = "1.10.4"
 uuid = { version = "1.14.0", features = ["v4"] }
 anyhow = "1.0.82"
-cssparser = "0.34.0"
 lightningcss = "1.0.0-alpha.63"
 open = "5.3.2"

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::io::Cursor;
+use std::rc::Rc;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::vec;
-use cssparser::ParserState;
 use floem::{IntoView, View, ViewId};
 use floem::event::EventPropagation;
 use floem::peniko::{Blob, Format, Image};
@@ -17,7 +17,9 @@ use lightningcss::stylesheet::{ParserOptions, StyleSheet};
 use rayon::prelude::*;
 use rayon::prelude::IntoParallelRefIterator;
 use rbook::{Ebook, Epub};
+use rbook::epub::Toc;
 use roxmltree::Document;
+use rustc_data_structures::fx::FxHashMap;
 use sha2::{Digest, Sha256};
 use threadpool::ThreadPool;
 
@@ -27,6 +29,7 @@ use crate::html_renderer::HtmlRenderer;
 use crate::IO::epub::{remove_dtd};
 use crate::IO::library::{read_book_position, update_book_path, update_last_read, write_book_position};
 use crate::library::{Page, Signals};
+use crate::toc::{hierarchical_toc_entry, toc_view, TocEntry};
 
 pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signals: Signals) -> impl View {
     let epub = Epub::new(path).unwrap();
@@ -50,13 +53,11 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
     let base_font = Attrs::new()
         .font_size(20.)
         .family(&[FamilyOwned::Serif])
-        .line_height(LineHeightValue::Normal(2.0))
+        .line_height(LineHeightValue::Normal(1.5))
         .color(Color::rgb8(43, 43, 43))
         ;
     let cache = GlyphCache::new();
-
-    /*let cleaned_files: Vec<String> = html_text.par_iter()
-        .map(|section| remove_dtd(section)).collect();*/
+    
 
     let documents: Vec<Document> = html_text.par_iter()
         .map(|section| Document::parse(&section).unwrap()).collect();
@@ -67,12 +68,14 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
         .map(|css_string| StyleSheet::parse(css_string, ParserOptions::default()).unwrap())
         .collect();
     let now = Instant::now();
-    let mut book_factory = BookElemFactory::new(cache, image_map);
+    let mut book_factory = BookElemFactory::new(cache, image_map, &base_font);
     let elems: Vec<HTMLPage> = documents.iter().zip(&sections)
         .map(|document| book_factory.parse_root(document.0.root_element(), base_font, document.1.clone(), &style_sheets))
         .collect();
     let mut pages: HashMap<String, HTMLPage> = HashMap::with_capacity(elems.len());
+    let mut link_index: HashMap<String, FxHashMap<String, Vec<usize>>> = HashMap::with_capacity(elems.len());
     for (elem, url) in elems.into_iter().zip(sections.clone()) {
+        link_index.insert(url.clone(), elem.locations.clone());
         pages.insert(url, elem);
     }
     println!("Elapsed parsing time: {}", now.elapsed().as_millis());
@@ -83,7 +86,7 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
 
 
     let mut html_renderer = HtmlRenderer::new(start_index_signal, book_factory.cache, pages, current_url, set_at_end, get_go_on);
-    html_renderer = html_renderer.style(|style| style.flex_grow(1.0).margin(40));
+    html_renderer = html_renderer.style(|style| style.flex_grow(1.0).margin(40).width_full());
 
     let back_button = button(label(move || { "Back" }))
         .on_click(move |_| {
@@ -93,19 +96,35 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
 
     let top_panel = h_stack((back_button, )).style(move |s| s.height(20).border_bottom(1));
 
-    let stack= v_stack((top_panel, html_renderer)).style(move |s| s.flex_grow(1.0));
+
+    let toc_on_click = Rc::new(move |link: String| {
+        let parts: Vec<&str> = link.split("#").collect();
+        current_url.set(parts[0].to_string());
+        if parts.len() == 1 {
+            start_index_signal.set(Vec::new());
+            return;
+        }
+        let ids = link_index.get(parts[0]).unwrap();
+        match ids.get(parts[1]) {
+            None => {start_index_signal.set(Vec::new())}
+            Some(index) => {start_index_signal.set(index.clone())}
+        }
+
+    });
+    let toc = create_toc(epub.toc().elements());
+    let toc_view = container(toc_view(toc, toc_on_click).style(|s| s.border_right(1).width_full())).style(|s| s.width(200));
+    let main_area = h_stack((toc_view, html_renderer)).style(move |s| s.flex_row().flex_grow(1.0));
+
+    let stack= v_stack((top_panel, main_area)).style(move |s| s.flex_grow(1.0));
     let lib_path = library_path.to_string();
     let id = id.to_string();
     create_effect(move |_| {
        let start_index = start_index_signal.get();
         write_book_position(&lib_path, &id, section_index.get(), start_index);
     });
-
-
+    
     create_effect(move |_| {
         let at_ends = get_at_end.get();
-   
-        
         if (at_ends == -1) || (at_ends == 1) {
             section_index.update(|idx| {
                 let url = current_url.get_untracked();
@@ -117,7 +136,6 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
                     counter += 1;
                 }
                 if at_ends == -1 {
-                
                     if *idx == 0 {
                         set_go_on.set(false);
                         return;
@@ -125,7 +143,6 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
                     set_go_on.set(true);
                     *idx -= 1;
                     current_url.set(sections[*idx].clone());
-                
                 }
                 if at_ends == 1 {
                     if *idx == sections.len() - 1 {
@@ -140,6 +157,10 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
         }
     });
     container(stack).style(move |s| s.flex_grow(1.0).background(Color::WHITE)).into_view()
+}
+
+fn create_toc(elems: Vec<&rbook::xml::Element>) -> Vec<TocEntry> {
+    elems.iter().map(|elem| TocEntry {title: elem.name().to_string(), link: elem.value().to_string(), children: create_toc(elem.children())}).collect()
 }
 
 
@@ -179,6 +200,7 @@ fn process_images(epub: &Epub) -> HashMap<String, ImageElem> {
             let hash        = hasher.finalize().to_vec();
             let image       = Image::new(blob.clone(), Format::Rgba8, width, height);
             *image_promise.write().unwrap() = Some((image.clone(), hash));
+            println!("Finish image processing");
         });
     }
     image_map
