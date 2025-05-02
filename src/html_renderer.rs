@@ -131,13 +131,17 @@ impl HtmlRenderer {
         if selection.start_col < glyph_col_index && glyph_col_index < selection.end_col {
             return true;
         }
-
+        let is_first_col = selection.start_col == glyph_col_index;
+        let is_last_col = selection.end_col == glyph_col_index;
         let is_first_line = gy0 < selection.start_selection.y && gy1 > selection.start_selection.y;
         let is_last_line = gy0 < selection.end_selection.y && gy1 > selection.end_selection.y;
+        let is_after_first_line = gy0 > selection.start_selection.y;
+        let is_before_last_line = gy0 < selection.end_selection.y;
         let is_first_x = gx1 >= selection.start_selection.x;
         let is_last_x = gx1 <= selection.end_selection.x;
         // Single column
-        if selection.start_col == glyph_col_index && selection.end_col == glyph_col_index {
+        if is_first_col && is_last_col {
+            // Single line
             if is_first_line && is_last_line {
                 let x_min = selection.start_selection.x.min(selection.end_selection.x);
                 let x_max = selection.start_selection.x.max(selection.end_selection.x);
@@ -149,28 +153,26 @@ impl HtmlRenderer {
             else if is_last_line {
                 if is_last_x {return true}
             }
-            else if gy0 > selection.start_selection.y && gy1 < selection.end_selection.y {
+            else if is_after_first_line && is_before_last_line {
                 return true;
             }
-            
-            return false;
         }
 
         // First column
-        if selection.start_col == glyph_col_index {
+        else if is_first_col {
             if is_first_line {
                 if is_first_x {return true}
             }
-            else if gy0 > selection.start_selection.y {
+            else if is_after_first_line {
                 return true;
             }
         }
         //End column
-        if selection.end_col == glyph_col_index {
+        else if is_last_col {
             if is_last_line {
                 if is_last_x {return true}
             }
-            else if gy0 < selection.end_selection.y {
+            else if is_before_last_line {
                 return true
             }
         }
@@ -273,6 +275,8 @@ impl HtmlRenderer {
         (render_state, Point::new(x, y))
     }
 
+
+
     fn paint_line(&self, cx: &mut PaintCx, elem: &Elem, line: &ElemLine, line_offset_y: f64, mut render_state: RenderState, render: bool) -> RenderState {
         let mut reader_assist_y = false;
         let mut x_index = 0;
@@ -292,11 +296,12 @@ impl HtmlRenderer {
                         for char_glyph in text {
                             let glyph = self.glyph_cache.get(char_glyph.char);
                             elem_width = char_glyph.x;
+                            let gx0 = elem_point.x + char_glyph.x as f64;
+                            let gy0 = elem_point.y;
+                            let gx1 = gx0 + glyph.size().width + 1.0;
+                            let gy1 = gy0 + line.height + 1.0;
                             if self.selection_active {//&& //let Some(location) = self.press_location {
-                                let gx0 = elem_point.x + char_glyph.x as f64;
-                                let gy0 = elem_point.y;
-                                let gx1 = gx0 + glyph.size().width;
-                                let gy1 = gy0 + glyph.size().height;
+                                
                                 //if hit4(self.press_location.unwrap(), self.move_location, gx0, gy0, gx1, gy1, self.col_count, self.col_width, self.col_gap)
                                 if self.hit(&render_state, gx0, gy0, gx1, gy1)
                                 {
@@ -306,8 +311,7 @@ impl HtmlRenderer {
                                     cx.fill(&rect, Color::LIGHT_BLUE, 0.);
                                 }
                             }
-                            cx.draw_text(glyph, Point::new(elem_point.x + char_glyph.x as f64, elem_point.y))
-
+                            cx.draw_text(glyph, Point::new(elem_point.x + char_glyph.x as f64, elem_point.y + line.height - glyph.size().height))
                         }
                     }
                     InlineContent::Link((text, link)) => {
@@ -319,7 +323,7 @@ impl HtmlRenderer {
                             let descent = glyph.lines().first().unwrap().layout_opt().as_ref().unwrap().first().as_ref().unwrap().max_descent as f64;
                             let y = elem_point.y + glyph.size().height - descent;
                             let x0 = x;
-                            let x1 = x0 + glyph.size().width;
+                            let x1 = x0 + glyph.size().width + 1.0;
                             let rect = Rect::new(x0 - 1., y, x1 + 1., y + 2.0);
                             cx.fill(&rect, Color::DARK_GREEN, 0.);
                             if let Some(location) = self.click_location {

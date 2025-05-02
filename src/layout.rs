@@ -57,8 +57,8 @@ pub fn layout_elem_lines(parser: &mut BookElemFactory, mut inline_items: Vec<Inl
             elem_lines          = add_line(parser, curr_line, elem_lines, parse_state);
             if let InlineContent::Image(image) = &mut inline_item.inline_content {
                 let scale_factor = inline_item.size.width / (parse_state.x + parse_state.width);
-                image.width = (image.width as f64 / scale_factor) as u32;
-                image.height = (image.height as f64 / scale_factor) as u32;
+                image.width = (image.width as f64 / scale_factor) as u16;
+                image.height = (image.height as f64 / scale_factor) as u16;
                 inline_item.size.width = inline_item.size.width / scale_factor;
                 inline_item.size.height = inline_item.size.height / scale_factor;
             }

@@ -84,6 +84,40 @@ impl Elem {
             }
         }
     }
+    
+}
+pub fn get_size(elem: &Elem, usage: &mut MemUsage) {
+    match &elem.elem_type {
+        ElemType::Block(block) => {
+            for child in &block.children {
+                usage.elem_size += std::mem::size_of::<Elem>();
+                get_size(child, usage);
+            }
+        }
+        ElemType::Lines(lines) => {
+            for line in &lines.elem_lines {
+                usage.line_size += std::mem::size_of::<ElemLine>();
+                for inline in &line.inline_elems {
+                    usage.inline_size += std::mem::size_of::<InlineElem>();
+                    match &inline.inline_content { 
+                        InlineContent::Text(glyphs) => {
+                            usage.char_size += size_of_vec(glyphs)
+                        }
+                        _ => ()
+                    }
+                }
+            }
+        }
+    }
+}
+pub struct MemUsage {
+    pub elem_size: usize,
+    pub line_size: usize,
+    pub inline_size: usize, 
+    pub char_size: usize,
+}
+pub fn size_of_vec<T>(vec: &Vec<T>) -> usize {
+    std::mem::size_of::<Vec<T>>() + vec.capacity() * std::mem::size_of::<T>()
 }
 pub type ImagePromise = Arc<RwLock<Option<(Image, Vec<u8>)>>>;
 pub struct HTMLPage { pub root: Elem, pub locations: FxHashMap<String, Vec<usize>>}
@@ -91,14 +125,18 @@ pub struct Elem             { pub size: Size, pub point: Point, pub elem_type: E
 pub enum ElemType           { Block(BlockElem), Lines(ElemLines) }
 pub struct BlockElem        { pub children: Vec<Elem>, pub total_child_count: usize, }
 pub struct ElemLines        { pub height: f64, pub elem_lines: Vec<ElemLine> }
+#[derive(Clone)]
 pub struct ElemLine         { pub height: f64, pub inline_elems: Vec<InlineElem> }
+#[derive(Clone)]
 pub struct InlineElem       { pub x: f64, pub inline_content: InlineContent }
-
+#[derive(Clone)]
 pub struct InlineItem       { pub size: Size, pub inline_content: InlineContent }
+#[derive(Clone)]
 pub enum InlineContent      { Text(Vec<CharGlyph>), Image(ImageElem), Link((Vec<CharGlyph>, String)) }
+#[derive(Clone)]
 pub struct CharGlyph        { pub char: u16, pub x: f32}
 #[derive(Clone)]
-pub struct ImageElem { pub width: u32, pub height: u32, pub image_promise: ImagePromise}
+pub struct ImageElem { pub width: u16, pub height: u16, pub image_promise: ImagePromise}
 pub struct BookElemFactory  { 
     pub curr_x: f64, 
     pub curr_y: f64,
@@ -170,7 +208,10 @@ impl BookElemFactory {
                     inline_items = Vec::new();
                 }
                 
-                if tag_name.eq("pre") { block_elem.add_child(self.parse_pre(child, font, style_sheets, parse_state, index.clone())); } 
+                if tag_name.eq("pre") { block_elem.add_child(self.parse_pre(child, font, style_sheets, parse_state, index.clone())); }
+                else if tag_name.eq("table") {
+                    block_elem.add_child(self.parse_table(child, font, style_sheets, parse_state, index.clone()));
+                }
                 else { block_elem.add_child(self.parse(child, font, style_sheets, parse_state, index.clone())); }
 
                 *index.last_mut().unwrap() += 1;
@@ -182,8 +223,13 @@ impl BookElemFactory {
                 inline_items = Vec::new();
                 *index.last_mut().unwrap() += 1;
             } else if tag_name.eq("a") {
-                if let Some(href) = child.attribute("href") { inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state, Some(href), &index)) } else { inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state, None, &index)) }
-            } else { inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state, None, &index)); }
+                if let Some(href) = child.attribute("href") { 
+                    inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state, Some(href), &index).0) 
+                } 
+                else { inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state, None, &index).0) }
+            } else { 
+                inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state, None, &index).0); 
+            }
             // println!("Tag name: {}", tag_name);
         }
         if inline_items.len() != 0 {
@@ -195,20 +241,29 @@ impl BookElemFactory {
         Elem { size: Size::new(600., block_height + margins.top + margins.bottom), point: init_point, elem_type: ElemType::Block(block_elem) }
     }
 
-    pub fn parse_inline(&mut self, node: Node, style_sheets: &Vec<StyleSheet>, mut font: Attrs, parse_state: ParseState, href: Option<&str>, index: &Vec<usize>) -> Vec<InlineItem> {
+    pub fn parse_inline(&mut self, node: Node, style_sheets: &Vec<StyleSheet>, mut font: Attrs, mut parse_state: ParseState, href: Option<&str>, index: &Vec<usize>) -> (Vec<InlineItem>, TextAlign) {
         let mut inline_items: Vec<InlineItem> = Vec::new();
         let now = Instant::now();
-        let (_, parse_state) = resolve_style(style_sheets, &node, &mut font, parse_state);
+        let (_, mut parse_state) = resolve_style(style_sheets, &node, &mut font, parse_state);
         self.style_time += (Instant::now() - now).as_nanos();
         if let Some(id) = node.attribute("id") {
             self.locations.insert(id.to_string(), index.clone());
         }
         for child in node.children() {
-            if child.tag_name().name().eq("") { inline_items.extend(self.parse_text(child.text().unwrap_or_default(), font, parse_state, href)); } else if child.has_tag_name("a") {
-                if let Some(href) = child.attribute("href") { inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state, Some(href), index)) }
-            } else { inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state, href, index)); }
+            if child.tag_name().name().eq("") { 
+                inline_items.extend(self.parse_text(child.text().unwrap_or_default(), font, parse_state, href)); 
+            } 
+            else if child.has_tag_name("a") {
+                if let Some(href) = child.attribute("href") { 
+                    inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state, Some(href), index).0) 
+                }
+            } else { 
+                let (inline, text_align) = self.parse_inline(child, style_sheets, font, parse_state, href, index);
+                parse_state.text_align = text_align;
+                inline_items.extend(inline); 
+            }
         }
-        inline_items
+        (inline_items, parse_state.text_align)
     }
 
     pub fn parse_pre(

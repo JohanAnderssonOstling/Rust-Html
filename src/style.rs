@@ -74,6 +74,10 @@ impl Style {
             "dd" => {
                 style.insert("margin-left", create_px(40.))
             }
+            "th" => {
+                style.insert("font-weight", CSSValue::FontWeight(FontWeight::Absolute(AbsoluteFontWeight::Bold)));
+                style.insert("text-align", CSSValue::TextAlign(TextAlign::Center))
+            }
             _ => ()
         }
         style

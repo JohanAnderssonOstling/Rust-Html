@@ -23,7 +23,7 @@ use rustc_data_structures::fx::FxHashMap;
 use sha2::{Digest, Sha256};
 use threadpool::ThreadPool;
 
-use crate::book_elem::{BookElemFactory, Elem, HTMLPage, ImageElem, ImagePromise, ParseState};
+use crate::book_elem::{BookElemFactory, CharGlyph, Elem, get_size, HTMLPage, ImageElem, ImagePromise, InlineContent, InlineElem, MemUsage, ParseState};
 use crate::glyph_interner::GlyphCache;
 use crate::html_renderer::HtmlRenderer;
 use crate::IO::epub::{remove_dtd};
@@ -47,6 +47,7 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
 
     let now = Instant::now();
     let image_map = process_images(&epub);
+
     println!("Elapsed image processing time: {}", now.elapsed().as_millis());
     //let image_map: HashMap<String, ImageElem> = HashMap::new();
 
@@ -85,7 +86,21 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
     let section_index                   = create_rw_signal(position.0);
     let (current_url)  = create_rw_signal(sections[position.0].clone());
 
-
+    let cache_size = book_factory.cache.total_memory_usage();
+    println!("Cache size: {cache_size}");
+    let mut size = 0;
+    let mut mem_usage = MemUsage {char_size: 0, inline_size: 0, line_size: 0, elem_size: 0};
+    for page in pages.values() {
+        get_size(&page.root, &mut mem_usage)
+    }
+    println!("Inline size: {}", std::mem::size_of::<InlineElem>());
+    println!("Inline content: {}", std::mem::size_of::<InlineContent>());
+    println!("Char size: {}", std::mem::size_of::<CharGlyph>());
+    println!("String size: {}", std::mem::size_of::<String>());
+    println!("Elem Size: {}", mem_usage.elem_size / 1_000_000);
+    println!("Line Size: {}", mem_usage.line_size / 1_000_000);
+    println!("Size: {}", mem_usage.char_size / 1_000_000);
+    println!("Inline Size: {}", mem_usage.inline_size / 1_000_000);
     let mut html_renderer = HtmlRenderer::new(start_index_signal, book_factory.cache, pages, current_url, set_at_end, get_go_on);
     html_renderer = html_renderer.style(|style| style.flex_grow(1.0).margin(40).width_full());
 
@@ -187,8 +202,8 @@ fn process_images(epub: &Epub) -> HashMap<String, ImageElem> {
 
         let image_bytes = epub.read_bytes_file(image_path).unwrap();
         let image_size  = ImageReader::with_format(Cursor::new(&image_bytes), image_type).into_dimensions().unwrap();
-        let width       = image_size.0;
-        let height      = image_size.1;
+        let width       = image_size.0 as u16;
+        let height      = image_size.1 as u16;
 
         let image_promise: ImagePromise = Arc::new(RwLock::new(None));
         let image = ImageElem { width, height, image_promise: image_promise.clone() };
@@ -200,7 +215,7 @@ fn process_images(epub: &Epub) -> HashMap<String, ImageElem> {
             let blob        = Blob::new(data.clone());
             hasher.update(&blob);
             let hash        = hasher.finalize().to_vec();
-            let image       = Image::new(blob.clone(), Format::Rgba8, width, height);
+            let image       = Image::new(blob.clone(), Format::Rgba8, width as u32, height as u32);
             *image_promise.write().unwrap() = Some((image.clone(), hash));
         });
     }

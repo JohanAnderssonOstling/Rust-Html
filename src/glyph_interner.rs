@@ -31,4 +31,16 @@ impl GlyphCache {
     pub fn get(&self, index: u16) -> &TextLayout{
         self.reverse.get(index as usize).unwrap()
     }
+
+    pub fn total_memory_usage(&self) -> usize {
+        let entry_size = size_of::<((char, u8, u16, Style), u16)>();
+
+        let table_overhead = size_of::<FxHashMap<(char, u8, u16, Style), u16>>();
+        let table_data = self.table.len() * entry_size;
+
+        let reverse_overhead = size_of::<Vec<TextLayout>>();
+        let reverse_data: usize = self.reverse.iter().map(|tl| size_of::<TextLayout>() /* + extras */).sum();
+
+        table_overhead + table_data + reverse_overhead + reverse_data
+    }
 }

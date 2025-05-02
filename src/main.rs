@@ -18,6 +18,7 @@ mod glyph_interner;
 mod layout;
 mod parser;
 mod toc;
+mod table_parser;
 
 fn app_view() -> impl View {
     /*let mut epub_renderer = EpubReader::new("/home/johan/Hem/Downloads/A Concise History of Switzerland.epub");
