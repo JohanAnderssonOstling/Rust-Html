@@ -29,7 +29,7 @@ pub fn add_line(parser: &mut BookElemFactory, mut curr_line: ElemLine, mut elem_
                     match &mut inline_elem.inline_content {
                         InlineContent::Text(glyphs) | InlineContent::Link((glyphs, _)) => {
                             for glyph in glyphs {
-                                glyph.x = glyph.x // Add scaling here
+                                glyph.x = glyph.x// Add scaling here
                             }
                         }
                         InlineContent::Image(_) => {}

@@ -1,3 +1,5 @@
+extern crate core;
+
 use floem::{IntoView, View};
 use floem::views::Decorators;
 use rbook::Ebook;

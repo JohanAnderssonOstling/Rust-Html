@@ -13,9 +13,9 @@ pub struct TocEntry {
 }
 
 pub fn toc_view(entries: Vec<TocEntry>, on_toc_click: Rc<dyn Fn(String)>) -> impl View {
-    stack_from_iter(entries.into_iter()
-        .map(|entry| hierarchical_toc_entry(entry, on_toc_click.clone())))
-        .style(move |s| s.flex_col().width_full().flex_grow(1.0))
+    container(stack_from_iter(entries.into_iter()
+        .map(|entry| hierarchical_toc_entry(entry, on_toc_click.clone()))).style(|s| s.flex_col().width(200))
+    ).style(move |s| s.max_width_pct(100.))
 }
 
 pub fn hierarchical_toc_entry(entry: TocEntry, on_toc_click: Rc<dyn Fn(String)>) -> impl View {
@@ -49,7 +49,7 @@ pub fn hierarchical_toc_entry(entry: TocEntry, on_toc_click: Rc<dyn Fn(String)>)
 
 
     // The header row combining the arrow button and title.
-    let header = h_stack((arrow_button, title_widget)).style(|s| s.flex_row());
+    let header = h_stack((arrow_button, title_widget)).style(|s| s.flex_row().width_full());
 
     // Build a container for the children that is reactive to the collapse signal.
     let children = dyn_view(move ||
@@ -58,19 +58,6 @@ pub fn hierarchical_toc_entry(entry: TocEntry, on_toc_click: Rc<dyn Fn(String)>)
             true => container(label(move || "").style(|s| s.width(0).height(0)))
         }
     );
-
-        /*.child_signal(collapsed, move |collapsed| {
-            if !*collapsed && !entry.children.is_empty() {
-                let child_views: Vec<_> = entry.children
-                    .iter()
-                    .cloned()
-                    .map(|child| hierarchical_toc_entry(child, on_toc_click.clone()))
-                    .collect();
-                Some(v_stack(child_views).style(|s| s.margin_left(20)))
-            } else {
-                None
-            }
-        });*/
 
     // Stack the header and children vertically.
     v_stack((header, children))

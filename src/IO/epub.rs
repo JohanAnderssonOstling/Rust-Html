@@ -6,6 +6,7 @@ use image::imageops::FilterType;
 use zip::{ZipArchive, ZipWriter};
 use image::io::Reader as ImageReader;
 use rbook::{Ebook, Epub};
+use rbook::result::EbookError;
 use rbook::xml::Element;
 use regex::Regex;
 use roxmltree::Document;
@@ -31,8 +32,8 @@ pub fn get_epub (path: &str) -> String {
     title
 }
 
-pub fn get_book_cover(lib_path: &str, path: &str) -> Book {
-    let epub        = Epub::new(&path).unwrap();
+pub fn get_book_cover(lib_path: &str, path: &str) -> Result<Book, EbookError> {
+    let epub        = Epub::new(&path)?;
     let title       = match epub.metadata().title() {
         None            => {path.split("/").last().unwrap().to_string()}
         Some(title)     => {title.value().to_string()}
@@ -73,7 +74,7 @@ pub fn get_book_cover(lib_path: &str, path: &str) -> Book {
     };
 
     let path = path.to_string();
-    Book {title, cover, path}
+    Ok(Book {title, cover, path})
 }
 
 fn get_cover(lib_path: &str, id: &str, epub: &Epub) -> Option<Vec<u8>> {

@@ -7,7 +7,7 @@ use floem::event::EventPropagation;
 use floem::peniko::Color;
 use floem::prelude::{button, Decorators, h_stack, label, RwSignal, ScrollExt, SignalGet, SignalUpdate, Stack, v_stack};
 use floem::reactive::{ReadSignal, WriteSignal};
-use floem::style::{CursorStyle, FlexWrap};
+use floem::style::{CursorStyle, FlexWrap, TextOverflow};
 use floem::views::{dyn_view, img, stack, stack_from_iter};
 use image::DynamicImage;
 use rayon::*;
@@ -37,8 +37,8 @@ pub fn library_view(signals: Signals) -> impl View{
 
     let main_view = dyn_view(move ||
         dir_view(&signals.library_path.get(), &signals.root_library_path.get(), signals.clone())
-    ).scroll().style(move |s| s.height_full().flex_grow(1.0));
-    v_stack((top_panel, main_view))
+    ).scroll().style(move |s| s.width_full().height_full().background(Color::WHITE));
+    v_stack((top_panel, main_view)).style(|s| s.width_full().flex_grow(1.0))
 }
 
 
@@ -47,14 +47,14 @@ pub fn dir_view(library_path: &str, root_library_path: &str, signals: Signals) -
     let (book_paths, dirs) = get_library(library_path);
     let now = Instant::now();
     let books: Vec<Book> = book_paths.par_iter()
-        .map(|book_path| get_book_cover(root_library_path, book_path))
+        .filter_map(|book_path| get_book_cover(root_library_path, book_path).ok())
         .collect();
     let image_loading_time = now.elapsed();
     let now = Instant::now();
 
     let book_stack = stack_from_iter(books.into_iter()
         .map(|book_cover| create_book_cover(book_cover.title, book_cover.cover, book_cover.path, signals.clone()) )
-    ).style(move |s| s.gap(20).flex_row().flex_wrap(FlexWrap::Wrap).flex_grow(1.0));
+    ).style(move |s| s.gap(40).flex_row().flex_wrap(FlexWrap::Wrap).flex_grow(1.0));
 
     let book_stack_id = book_stack.id();
     let image_decoding_time = now.elapsed();
@@ -80,11 +80,17 @@ pub fn dir_view(library_path: &str, root_library_path: &str, signals: Signals) -
 
 fn create_book_cover(title: String, cover: Option<Vec<u8>>, path: String, signals: Signals) -> Stack {
     let title_label = label(move || title.clone()).style(|s| s
-        .width(300).font_size(16).text_ellipsis());
+        .width(250).height(40)
+        .font_size(16)
+        .text_ellipsis().text_overflow(TextOverflow::Wrap)
+        .margin_top(10)
+    );
     let cover = match cover {
         None => {Vec::new()}
         Some(cover) => {cover}
     };
+    let box_shadow  = Color::rgba8(0, 0, 0, 150);
+    
     let cover_image = img(move || cover.clone())
         .on_click(move |s| {
             signals.prev_page.set(Page::Library);
@@ -92,9 +98,17 @@ fn create_book_cover(title: String, cover: Option<Vec<u8>>, path: String, signal
             signals.active_page.set(Page::Reader);
             EventPropagation::Continue
         })
-        .style(move |s| s.width(300).height(500)
+        .style(move |s| s.width(250).height(400)
             .cursor(CursorStyle::Pointer)
-            .border_radius(15));
+            .border_radius(6)
+            .border_color(Color::BLACK)
+            .border(2)
+            .box_shadow_blur(8).box_shadow_color(box_shadow).box_shadow_spread(0)
+            .box_shadow_h_offset(6)
+            
+            .box_shadow_v_offset(12)
+
+        );
     v_stack((cover_image, title_label))
 }
 

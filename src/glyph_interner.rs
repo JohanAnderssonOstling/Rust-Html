@@ -16,6 +16,7 @@ impl GlyphCache {
         font = font.raw_weight(parse_state.font_weight);
         font = font.style(parse_state.text_style);
         
+        
         let index = self.table.entry((char, font_size, parse_state.font_weight, parse_state.text_style)).or_insert_with(|| {
             let index = self.reverse.len() as u16;
             let mut layout = TextLayout::new();

@@ -79,6 +79,7 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
         pages.insert(url, elem);
     }
     println!("Elapsed parsing time: {}", now.elapsed().as_millis());
+    println!("Style time: {}", book_factory.style_time / 1_000_000);
     let (get_at_end, set_at_end)        = create_signal(0);
     let (get_go_on, set_go_on)          = create_signal(false);
     let section_index                   = create_rw_signal(position.0);
@@ -98,6 +99,7 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
 
 
     let toc_on_click = Rc::new(move |link: String| {
+        println!("Clicked toc link: {link}");
         let parts: Vec<&str> = link.split("#").collect();
         current_url.set(parts[0].to_string());
         if parts.len() == 1 {
@@ -200,7 +202,6 @@ fn process_images(epub: &Epub) -> HashMap<String, ImageElem> {
             let hash        = hasher.finalize().to_vec();
             let image       = Image::new(blob.clone(), Format::Rgba8, width, height);
             *image_promise.write().unwrap() = Some((image.clone(), hash));
-            println!("Finish image processing");
         });
     }
     image_map
