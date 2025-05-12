@@ -183,7 +183,12 @@ impl HtmlRenderer {
     
     pub fn next(&mut self) {
         self.render_forward = true;
-        if self.end_index.len() != 0 && self.end_index[0] == 1 {
+        let current_url     = self.read_current_url.get();
+        let root_elem       = &self.pages.get(&current_url).unwrap().root;
+        let last_index      = root_elem.get_last_index();
+        //if self.end_index.len() != 0 && self.end_index[0] == 1 {
+        println!("Last index: {:#?}\n End index {:#?}", last_index, self.end_index);
+        if self.end_index.eq(&last_index) || (self.end_index.len() != 0 && self.end_index[0] == 1)  {
             self.at_ends.set(1);
             if !self.get_go_on.get() {return}
             self.start_index.set(Vec::new());
@@ -251,6 +256,7 @@ impl HtmlRenderer {
         let root_elem       = &self.pages.get(&current_url).unwrap().root;
         let last_index      = root_elem.get_last_index();
         self.end_index      = last_index;
+        self.end_elem_index.set(99999999);
         self.render_forward = false;
     }
 
@@ -287,6 +293,7 @@ impl HtmlRenderer {
         }
         let mut line_point          = Point::new(elem.point.x, elem.point.y + line_offset_y);
         (render_state, line_point)  = self.resolve_point(line_point, line.height, render_state);
+        if render_state.terminate {return render_state}
         if !render {return render_state}
 
             for elem in line.inline_elems.iter() {
@@ -397,6 +404,7 @@ impl HtmlRenderer {
                     line_offset_y -= line.height;
                     if self.end_elem_index.get() == 0 || self.end_elem_index.get() > current_elem_index - line.inline_elems.len() {render_state.first_line_rendered = true;}
                     if render_state.first_line_rendered {
+
                         render_state = self.paint_line(cx, &elem, &line, line_offset_y, render_state, true);
                         if render_state.terminate {return (render_state, index, current_elem_index)}
                     }
@@ -466,13 +474,31 @@ impl View for HtmlRenderer {
                             if str.eq("c") {
                                 self.copy = true;
                             }
-                            if str.eq("+") {
-                                self.scale += 0.1;
+                            if str.eq("+") || str.eq("-") {
+                                let orig_scale = self.scale;
+                                let orig_move_x = self.move_location.x * self.scale;
+                                let orig_move_y = self.move_location.y * self.scale;
+                                let mut orig_press_x = 0.;
+                                let mut orig_press_y = 0.;
+                                if let Some(mut loc) = self.press_location  {
+                                    orig_press_x = loc.x * self.scale;
+                                    orig_press_y = loc.y * self.scale;
+                                }
+                                if str.eq("+") {
+                                    self.scale += 0.1;
+                                }
+                                if str.eq("-") {
+                                    self.scale -= 0.1;
+                                }
+                                let scale_change = orig_scale - self.scale;
+                                if let Some(mut loc) = self.press_location  {
+                                   loc.x = orig_press_x / self.scale;
+                                    loc.y = orig_press_y / self.scale;
+                                }
+                                self.move_location.x = orig_move_x / self.scale;
+                                self.move_location.y = orig_move_y / self.scale;
                             }
-                            if str.eq("-") {
-                                self.scale -= 0.1;
-                            }
-                            println!("Scale: {}", self.scale);
+
                         }
                         _ => ()
                     }
@@ -506,7 +532,6 @@ impl View for HtmlRenderer {
                 if self.selection_active {
                     self.selection_active = false;
                 }
-                println!("Press: {:#?}", event.pos);
                 self.key_press = true;
                 self.press_location = Some(Point::new(event.pos.x / self.scale, event.pos.y / self.scale));
             }
@@ -535,6 +560,7 @@ impl View for HtmlRenderer {
         self.size.height        /= self.scale;
         self.col_count          = (self.size.width / self.col_width).floor();
         self.col_gap            = (self.size.width - self.col_count * self.col_width) / (self.col_count + 1.);
+        //self.col_gap = 0.;
         let mut render_state    = RenderState {x: 0., y: 0., col_index: 0., terminate: false, line_index: 0, selected_text: String::new(), first_line_rendered: false, selection: self.get_selection()};
         let mut start_index     = self.start_index.get();
         let mut start_elem_index = self.start_elem_index.get_untracked();

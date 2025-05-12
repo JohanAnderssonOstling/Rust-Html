@@ -41,6 +41,7 @@ impl GlyphCache {
         let reverse_overhead = size_of::<Vec<TextLayout>>();
         let reverse_data: usize = self.reverse.iter().map(|tl| size_of::<TextLayout>() /* + extras */).sum();
 
-        table_overhead + table_data + reverse_overhead + reverse_data
+        //table_overhead + table_data + reverse_overhead + reverse_data
+        self.reverse.len()
     }
 }

@@ -67,9 +67,10 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
     let css_strings: Vec<String> = epub.manifest().all_by_media_type("text/css").iter()
         .map(|css_name| epub.read_file(css_name.value()).unwrap())
         .collect();
-    let style_sheets: Vec<StyleSheet> = css_strings.iter()
+    /*let style_sheets: Vec<StyleSheet> = css_strings.iter()
         .map(|css_string| StyleSheet::parse(css_string, ParserOptions::default()).unwrap())
-        .collect();
+        .collect();*/
+    let style_sheets = Vec::new();
     let now = Instant::now();
     let mut book_factory = BookElemFactory::new(cache, image_map, &base_font);
     let elems: Vec<HTMLPage> = documents.iter().zip(&sections)
@@ -81,6 +82,7 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
         link_index.insert(url.clone(), elem.locations.clone());
         pages.insert(url, elem);
     }
+    drop(style_sheets);
     println!("Elapsed parsing time: {}", now.elapsed().as_millis());
     println!("Style time: {}", book_factory.style_time / 1_000_000);
     let (get_at_end, set_at_end)        = create_signal(0);
@@ -104,7 +106,7 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
     println!("Size: {}", mem_usage.char_size / 1_000_000);
     println!("Inline Size: {}", mem_usage.inline_size / 1_000_000);
     let mut html_renderer = HtmlRenderer::new(start_index_signal, book_factory.cache, pages, current_url, set_at_end, get_go_on);
-    html_renderer = html_renderer.style(|style| style.flex_grow(1.0).width_full());
+    html_renderer = html_renderer.style(|style| style.flex_grow(1.0).margin(40).width_full());
 
 
     let toc_on_click = Rc::new(move |link: String| {
@@ -167,7 +169,6 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
             }
             counter += 1;
         }
-        println!("Setting pos: {}, {:#?}", counter, start_index);
 
         write_book_position(&lib_path, &id, counter, start_index);
     });
@@ -241,7 +242,7 @@ fn process_images(epub: &Epub) -> HashMap<String, ImageElem> {
         let image_promise: ImagePromise = Arc::new(RwLock::new(None));
         let image = ImageElem { width, height, image_promise: image_promise.clone() };
         image_map.insert(image_path.to_string(), image);
-        pool.execute(move || {
+        /*pool.execute(move || {
             
             let data = Arc::new(ImageReader::with_format(Cursor::new(image_bytes), image_type).decode().unwrap().to_rgba8().into_raw());
             let mut hasher  = Sha256::new();
@@ -250,7 +251,7 @@ fn process_images(epub: &Epub) -> HashMap<String, ImageElem> {
             let hash        = hasher.finalize().to_vec();
             let image       = Image::new(blob.clone(), Format::Rgba8, width as u32, height as u32);
             *image_promise.write().unwrap() = Some((image.clone(), hash));
-        });
+        });*/
     }
     image_map
 }
