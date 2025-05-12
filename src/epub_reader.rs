@@ -7,9 +7,9 @@ use std::vec;
 use floem::{IntoView, View, ViewId};
 use floem::event::EventPropagation;
 use floem::peniko::{Blob, Format, Image};
-use floem::prelude::{Color, container, create_rw_signal, create_signal, label, RwSignal, SignalGet, SignalUpdate};
+use floem::prelude::{Color, container, create_rw_signal, create_signal, dyn_view, label, RwSignal, scroll, ScrollExt, SignalGet, SignalUpdate};
 use floem::reactive::{create_effect, WriteSignal};
-use floem::views::{button, Decorators, h_stack, v_stack};
+use floem::views::{button, Decorators, empty, h_stack, v_stack};
 use floem_renderer::text::{Attrs, FamilyOwned, LineHeightValue};
 use image::ImageFormat;
 use image::io::Reader as ImageReader;
@@ -51,9 +51,11 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
     println!("Elapsed image processing time: {}", now.elapsed().as_millis());
     //let image_map: HashMap<String, ImageElem> = HashMap::new();
 
+    let font_family = "Liberation Serif".to_string();
+    let f = &[FamilyOwned::Name(font_family)];
     let base_font = Attrs::new()
         .font_size(20.)
-        .family(&[FamilyOwned::Serif])
+        .family(f)
         .line_height(LineHeightValue::Normal(1.5))
         .color(Color::rgb8(43, 43, 43))
         ;
@@ -102,15 +104,7 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
     println!("Size: {}", mem_usage.char_size / 1_000_000);
     println!("Inline Size: {}", mem_usage.inline_size / 1_000_000);
     let mut html_renderer = HtmlRenderer::new(start_index_signal, book_factory.cache, pages, current_url, set_at_end, get_go_on);
-    html_renderer = html_renderer.style(|style| style.flex_grow(1.0).margin(40).width_full());
-
-    let back_button = button(label(move || { "Back" }))
-        .on_click(move |_| {
-            signals.active_page.set(prev_page);
-            EventPropagation::Continue
-        });
-
-    let top_panel = h_stack((back_button, )).style(move |s| s.height(20).border_bottom(1));
+    html_renderer = html_renderer.style(|style| style.flex_grow(1.0).width_full());
 
 
     let toc_on_click = Rc::new(move |link: String| {
@@ -128,16 +122,54 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
         }
 
     });
+    let show_sidebar = create_rw_signal(true);
+    let toggle_button = button(label (move || {"Toggle TOC"}))
+        .on_click(move |_| {
+            let show_sidebar = show_sidebar.clone();
+             show_sidebar.update(|v| *v = !*v);
+            EventPropagation::Continue
+        });
+    let back_button = button(label(move || { "Back" }))
+        .on_click(move |_| {
+            signals.active_page.set(prev_page);
+            EventPropagation::Continue
+        });
+    let top_panel = h_stack((back_button, toggle_button)).style(move |s| s.border_bottom(1).flex_shrink(0.).flex_grow(0.));
     let toc = create_toc(epub.toc().elements());
-    let toc_view = container(toc_view(toc, toc_on_click).style(|s| s.border_right(1).width_full())).style(|s| s.width(200));
-    let main_area = h_stack((toc_view, html_renderer)).style(move |s| s.flex_row().flex_grow(1.0));
+    //let toc_view = v_stack((toc_view(toc, toc_on_click, 0),)).scroll()
+       //     .style(|s| s.border_right(1).width(321).height_full());
 
-    let stack= v_stack((top_panel, main_area)).style(move |s| s.flex_grow(1.0));
+    let toc_view = dyn_view(move ||
+        if show_sidebar.get() {
+            container(v_stack((crate::toc::toc_view(toc.clone(), toc_on_click.clone(), 0),)).scroll()
+                .style(|s| s.border_right(1).width(340)))
+        }
+        else {
+            container(empty())
+        }
+    );
+    let main_area = h_stack((
+        toc_view,
+        html_renderer
+    )).style(move |s| s.flex_grow(1.0).min_height(0));
+
+    let stack= v_stack((top_panel, main_area,)).style(move |s| s.flex_grow(1.0).height_full().flex_col());
     let lib_path = library_path.to_string();
     let id = id.to_string();
+    let cloned_sections = sections.clone();
     create_effect(move |_| {
        let start_index = start_index_signal.get();
-        write_book_position(&lib_path, &id, section_index.get(), start_index);
+        let url = current_url.get_untracked();
+        let mut counter = 0;
+        for section in &cloned_sections {
+            if section.eq(&url) {
+                break;
+            }
+            counter += 1;
+        }
+        println!("Setting pos: {}, {:#?}", counter, start_index);
+
+        write_book_position(&lib_path, &id, counter, start_index);
     });
     
     create_effect(move |_| {
@@ -173,7 +205,8 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
             });
         }
     });
-    container(stack).style(move |s| s.flex_grow(1.0).background(Color::WHITE)).into_view()
+    //container(stack).style(move |s| s.flex_grow(1.0).background(Color::WHITE)).into_view()
+    stack
 }
 
 fn create_toc(elems: Vec<&rbook::xml::Element>) -> Vec<TocEntry> {

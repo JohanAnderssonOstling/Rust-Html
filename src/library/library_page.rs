@@ -80,7 +80,7 @@ pub fn dir_view(library_path: &str, root_library_path: &str, signals: Signals) -
 
 fn create_book_cover(title: String, cover: Option<Vec<u8>>, path: String, signals: Signals) -> Stack {
     let title_label = label(move || title.clone()).style(|s| s
-        .width(250).height(40)
+        .width(200).height(40)
         .font_size(16)
         .text_ellipsis().text_overflow(TextOverflow::Wrap)
         .margin_top(10)
@@ -98,11 +98,11 @@ fn create_book_cover(title: String, cover: Option<Vec<u8>>, path: String, signal
             signals.active_page.set(Page::Reader);
             EventPropagation::Continue
         })
-        .style(move |s| s.width(250).height(400)
+        .style(move |s| s.width(200).height(320)
             .cursor(CursorStyle::Pointer)
             .border_radius(6)
             .border_color(Color::BLACK)
-            .border(2)
+            //.border(2)
             .box_shadow_blur(8).box_shadow_color(box_shadow).box_shadow_spread(0)
             .box_shadow_h_offset(6)
             

@@ -1,15 +1,21 @@
 use floem::peniko::Color;
 use floem::prelude::Decorators;
+use floem::style::StyleValue;
 use floem::views::{Label, label};
+use floem_renderer::text::Weight;
 
 const BACKGROUND_COLOR: Color =  Color::WHITE;
 const HOVER_COLOR: Color = Color {r: 240, g: 240, b: 240, a: 255};
+const Text_COLOR: Color = Color {r: 43, g: 43, b: 43, a: 255};
 
 pub fn create_label(text: String, font_size: i32) -> Label {
     label(move || text.clone()).style(move |s| s 
         .hover(|s| s.background(HOVER_COLOR))
         .text_ellipsis()
         .font_size(font_size)
+        .font_family("Liberation Serif".to_string())
+        .font_weight(Weight::LIGHT)
+        .color(Text_COLOR)
     )
 }
 
