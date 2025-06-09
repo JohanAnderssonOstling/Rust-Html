@@ -19,8 +19,8 @@ use crate::library::components::create_label;
 pub fn home_view(signals: Signals) -> impl View {
     let (libraries, set_libraries) = create_signal(get_libraries());
     let stack = dyn_stack(move || libraries.get(),
-    move |library| library.clone(),
-    move |library| create_view(library.path, library.book_paths, signals.clone()) )
+        move |library| library.clone(),
+        move |library| create_view(library.path, library.book_paths, signals.clone()))
         
         .style(|s| s
             .flex_row()
@@ -85,7 +85,7 @@ fn create_top_bar(set_libraries: WriteSignal<Vec<Library>>) -> impl IntoView {
             .justify_content(Some(JustifyContent::SpaceBetween))
             .align_items(Some(AlignItems::Center))
             .padding(20)
-            .background(Color::WHITE)
+            //.background(Color::WHITE)
             .border_bottom(1)
             .border_color(Color::rgb8(229, 231, 235))
         )
