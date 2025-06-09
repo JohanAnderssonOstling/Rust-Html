@@ -84,7 +84,8 @@ fn create_top_bar(set_libraries: WriteSignal<Vec<Library>>) -> impl IntoView {
         .style(move |s| s
             .justify_content(Some(JustifyContent::SpaceBetween))
             .align_items(Some(AlignItems::Center))
-            .padding(20)
+            .padding_right(40)
+            .padding_left(40)
             //.background(Color::WHITE)
             .border_bottom(1)
             .border_color(Color::rgb8(229, 231, 235))
