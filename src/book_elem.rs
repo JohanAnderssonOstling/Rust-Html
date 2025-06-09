@@ -266,94 +266,7 @@ impl BookElemFactory {
         (inline_items, parse_state.text_align)
     }
 
-    pub fn parse_pre(
-        &mut self,
-        node: Node,
-        mut font: Attrs,
-        style_sheets: &Vec<StyleSheet>,
-        parse_state: ParseState,
-        index: Vec<usize>,
-    ) -> Elem {
-        let init_point = Point::new(self.curr_x, self.curr_y);
-        let mut lines: Vec<ElemLine> = Vec::new();
-        let mut current_line: Vec<InlineElem> = Vec::new();
-        let mut x = 0.0;
-        let mut max_height = 0.0;
 
-        let now = Instant::now();
-        let (_, parse_state) = resolve_style(style_sheets, &node, &mut font, parse_state);
-        self.style_time += (Instant::now() - now).as_nanos();
-
-        fn recurse_pre<'a>(
-            factory: &mut BookElemFactory,
-            node: Node<'a, 'a>,
-            font: Attrs,
-            style_sheets: &Vec<StyleSheet>,
-            parse_state: ParseState,
-            x: &mut f64,
-            max_height: &mut f64,
-            current_line: &mut Vec<InlineElem>,
-            lines: &mut Vec<ElemLine>,
-        ) {
-            if let Some(text) = node.text() {
-                for line in text.split_inclusive('\n') {
-                    for ch in line.chars() {
-                        if ch == '\n' {
-                            lines.push(ElemLine {
-                                height: *max_height,
-                                inline_elems: std::mem::take(current_line),
-                            });
-                            *x = 0.0;
-                            *max_height = 0.0;
-                            continue;
-                        }
-                        let (text_layout, index) = factory.cache.get_or_insert(ch, font, &parse_state);
-                        *max_height = max_height.max(text_layout.size().height);
-                        current_line.push(InlineElem {
-                            x: *x,
-                            inline_content: InlineContent::Text(vec![CharGlyph { char: index, x: 0. }]),
-                        });
-                        *x += text_layout.size().width;
-                    }
-                }
-            } else {
-                for child in node.children() {
-                    if child.is_element() {
-                        recurse_pre(factory, child, font, style_sheets, parse_state, x, max_height, current_line, lines);
-                    }
-                }
-            }
-        }
-
-        recurse_pre(
-            self,
-            node,
-            font,
-            style_sheets,
-            parse_state,
-            &mut x,
-            &mut max_height,
-            &mut current_line,
-            &mut lines,
-        );
-
-        // Add final line if needed
-        if !current_line.is_empty() {
-            lines.push(ElemLine {
-                height: max_height,
-                inline_elems: current_line,
-            });
-        }
-
-        let total_height = lines.iter().map(|l| l.height).sum::<f64>();
-        self.curr_y += total_height;
-
-        Elem {
-            size: Size::new(parse_state.width, total_height),
-            point: init_point,
-            elem_type: ElemType::Lines(ElemLines { height: total_height, elem_lines: lines }),
-        }
-    }
 
     pub fn parse_text(&mut self, text: &str, font: Attrs, parse_state: ParseState, href: Option<&str>) -> Vec<InlineItem> {
         let mut inline_items: Vec<InlineItem> = Vec::new();
@@ -400,6 +313,7 @@ impl BookElemFactory {
             let mut char_glyphs = Vec::with_capacity(segment.len());
             for ch in segment.chars() {
                 let (text_layout, index) = self.cache.get_or_insert(ch, font, &parse_state);
+
                 char_glyphs.push(CharGlyph { char: index, x: char_x });
                 char_x += text_layout.size().width as f32;
                 segment_height = segment_height.max(text_layout.size().height);
@@ -544,11 +458,32 @@ fn resolve_path(html_path: &str, relative_path: &str) -> String {
 }
 
 mod tests {
-    use crate::book_elem::InlineContent;
+    use std::collections::HashMap;
+    use std::fs;
+    use floem::peniko::Color;
+    use floem_renderer::text::{Attrs, FamilyOwned, LineHeightValue};
+    use roxmltree::Document;
+    use crate::book_elem::{BookElemFactory, InlineContent};
+    use crate::glyph_interner::GlyphCache;
 
     #[test]
     fn test_mem_size() {
-        let size = std::mem::size_of::<InlineContent>();
-        println!("Size: {size}")
+        for i in 0..100 {
+            let path = "/home/johan/RustroverProjects/Rust-Html/test_files/A Concise History of Switzerland/text/part0012.html";
+            let html = fs::read_to_string(path).unwrap();
+            let document = Document::parse(&html).unwrap();
+            let cache = GlyphCache::new();
+            let font_family = "Liberation Serif".to_string();
+            let f = &[FamilyOwned::Name(font_family)];
+            let base_font = Attrs::new()
+                .font_size(20.)
+                .family(f)
+                .line_height(LineHeightValue::Normal(1.5))
+                .color(Color::rgb8(43, 43, 43))
+                ;
+            let mut book_factory = BookElemFactory::new(cache, HashMap::new(), &base_font);
+            let root = book_factory.parse_root(document.root(), base_font, "/".to_string(), &Vec::new());
+        }
+
     }
 }

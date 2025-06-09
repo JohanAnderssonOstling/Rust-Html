@@ -67,10 +67,10 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
     let css_strings: Vec<String> = epub.manifest().all_by_media_type("text/css").iter()
         .map(|css_name| epub.read_file(css_name.value()).unwrap())
         .collect();
-    /*let style_sheets: Vec<StyleSheet> = css_strings.iter()
+    let style_sheets: Vec<StyleSheet> = css_strings.iter()
         .map(|css_string| StyleSheet::parse(css_string, ParserOptions::default()).unwrap())
-        .collect();*/
-    let style_sheets = Vec::new();
+        .collect();
+    //let style_sheets = Vec::new();
     let now = Instant::now();
     let mut book_factory = BookElemFactory::new(cache, image_map, &base_font);
     let elems: Vec<HTMLPage> = documents.iter().zip(&sections)
@@ -242,7 +242,7 @@ fn process_images(epub: &Epub) -> HashMap<String, ImageElem> {
         let image_promise: ImagePromise = Arc::new(RwLock::new(None));
         let image = ImageElem { width, height, image_promise: image_promise.clone() };
         image_map.insert(image_path.to_string(), image);
-        /*pool.execute(move || {
+        pool.execute(move || {
             
             let data = Arc::new(ImageReader::with_format(Cursor::new(image_bytes), image_type).decode().unwrap().to_rgba8().into_raw());
             let mut hasher  = Sha256::new();
@@ -251,7 +251,7 @@ fn process_images(epub: &Epub) -> HashMap<String, ImageElem> {
             let hash        = hasher.finalize().to_vec();
             let image       = Image::new(blob.clone(), Format::Rgba8, width as u32, height as u32);
             *image_promise.write().unwrap() = Some((image.clone(), hash));
-        });*/
+        });
     }
     image_map
 }

@@ -1,4 +1,3 @@
-extern crate core;
 
 use floem::{IntoView, View};
 use floem::views::Decorators;
@@ -19,6 +18,7 @@ mod layout;
 mod parser;
 mod toc;
 mod table_parser;
+mod pre_parser;
 
 fn app_view() -> impl View {
     /*let mut epub_renderer = EpubReader::new("/home/johan/Hem/Downloads/A Concise History of Switzerland.epub");

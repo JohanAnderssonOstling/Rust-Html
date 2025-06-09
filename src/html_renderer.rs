@@ -303,23 +303,23 @@ impl HtmlRenderer {
                     InlineContent::Text(text) => {
                         for char_glyph in text {
                             let glyph = self.glyph_cache.get(char_glyph.char);
+                            let ascent = glyph.lines().first().unwrap().layout_opt().as_ref().unwrap().first().as_ref().unwrap().max_ascent as f64;
+                            let descent = glyph.lines().first().unwrap().layout_opt().as_ref().unwrap().first().as_ref().unwrap().max_descent as f64;
+
                             elem_width = char_glyph.x;
                             let gx0 = elem_point.x + char_glyph.x as f64;
                             let gy0 = elem_point.y;
                             let gx1 = gx0 + glyph.size().width + 1.0;
                             let gy1 = gy0 + line.height + 1.0;
-                            if self.selection_active {//&& //let Some(location) = self.press_location {
-                                
-                                //if hit4(self.press_location.unwrap(), self.move_location, gx0, gy0, gx1, gy1, self.col_count, self.col_width, self.col_gap)
-                                if self.hit(&render_state, gx0, gy0, gx1, gy1)
-                                {
-                                    let rect = Rect::new(gx0, gy0, gx1, gy1);
-                                    let text = glyph.lines().first().unwrap().text();
-                                    render_state.selected_text.push_str(text);
-                                    cx.fill(&rect, Color::LIGHT_BLUE, 0.);
-                                }
+                            if self.selection_active && self.hit(&render_state, gx0, gy0, gx1, gy1){
+                                let rect = Rect::new(gx0, gy0, gx1, gy1);
+                                let text = glyph.lines().first().unwrap().text();
+                                render_state.selected_text.push_str(text);
+                                cx.fill(&rect, Color::LIGHT_BLUE, 0.);
                             }
-                            cx.draw_text(glyph, Point::new(elem_point.x + char_glyph.x as f64, elem_point.y + line.height - glyph.size().height))
+
+                            //cx.draw_text(glyph, Point::new(elem_point.x + char_glyph.x as f64, elem_point.y + line.height - glyph.size().height))
+                            cx.draw_text(glyph, Point::new(elem_point.x + char_glyph.x as f64, elem_point.y + line.height / 1.6 - ascent - descent));
                         }
                     }
                     InlineContent::Link((text, link)) => {
