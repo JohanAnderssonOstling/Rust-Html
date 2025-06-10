@@ -217,7 +217,7 @@ impl BookElemFactory {
                 *index.last_mut().unwrap() += 1;
             } 
             else if tag_name.eq("") { inline_items.extend(self.parse_text(child.text().unwrap_or_default(), font, parse_state, None)); } 
-            else if tag_name.eq("img") { inline_items.push(self.parse_img(child, &index, parse_state)); } 
+            else if tag_name.eq("img") { inline_items.push(self.parse_img(child,style_sheets, font, &index, parse_state)); }
             else if tag_name.eq("br") {
                 block_elem.add_child(layout_elem_lines(self, inline_items, parse_state));
                 inline_items = Vec::new();
@@ -264,6 +264,18 @@ impl BookElemFactory {
             }
         }
         (inline_items, parse_state.text_align)
+    }
+
+    pub fn parse_img(&mut self, node: Node, style_sheets: &Vec<StyleSheet>, mut font: Attrs, index: &Vec<usize>, parse_state: ParseState) -> InlineItem {
+        if let Some(id) = node.attribute("id") {
+            self.locations.insert(id.to_string(), index.clone());
+        }
+        let (_, mut parse_state) = resolve_style(style_sheets, &node, &mut font, parse_state);
+        let relative_path   = node.attribute("src").unwrap();
+        let image_path      = resolve_path(&self.base_path, relative_path);
+        let image           = self.images.get(&image_path).unwrap();
+        let size            = Size::new(image.width as f64, image.height as f64);
+        InlineItem {size, inline_content: InlineContent::Image(image.clone())}
     }
 
 
@@ -431,16 +443,7 @@ impl BookElemFactory {
         inline_items
     }
 
-    pub fn parse_img(&mut self, node: Node, index: &Vec<usize>, parse_state: ParseState) -> InlineItem {
-        if let Some(id) = node.attribute("id") {
-            self.locations.insert(id.to_string(), index.clone());
-        }
-        let relative_path   = node.attribute("src").unwrap();
-        let image_path      = resolve_path(&self.base_path, relative_path);
-        let image           = self.images.get(&image_path).unwrap();
-        let size            = Size::new(image.width as f64, image.height as f64);
-        InlineItem {size, inline_content: InlineContent::Image(image.clone())}
-    }
+
 }
 
 fn resolve_path(html_path: &str, relative_path: &str) -> String {

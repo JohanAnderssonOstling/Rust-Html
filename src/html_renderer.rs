@@ -350,7 +350,8 @@ impl HtmlRenderer {
                         match image_promise.deref() {
                             None => {println!("Found no image")}
                             Some(image) => {
-                                let rect = Rect::new(line_point.x, line_point.y, line_point.x + image_elem.width as f64, line_point.y + image_elem.height as f64);
+
+                                let rect = Rect::new(line_point.x + elem.x, line_point.y, line_point.x + elem.x + image_elem.width as f64, line_point.y + image_elem.height as f64);
                                 let img = Img {img: image.0.clone(), hash: &image.1};
                                 cx.draw_img(img, rect);
                                // println!("Rendered image: {}", line_point.x);

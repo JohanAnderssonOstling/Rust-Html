@@ -78,11 +78,11 @@ pub fn dir_view(library_path: &str, root_library_path: &str, signals: Signals) -
         .into_view()
 }
 
-fn create_book_cover(title: String, cover: Option<Vec<u8>>, path: String, signals: Signals) -> Stack {
+pub fn create_book_cover(title: String, cover: Option<Vec<u8>>, path: String, signals: Signals) -> Stack {
     let title_label = label(move || title.clone()).style(|s| s
         .width(200).height(40)
         .font_size(16)
-        .text_ellipsis().text_overflow(TextOverflow::Wrap)
+        .text_ellipsis()
         .margin_top(10)
     );
     let cover = match cover {
@@ -93,8 +93,8 @@ fn create_book_cover(title: String, cover: Option<Vec<u8>>, path: String, signal
     
     let cover_image = img(move || cover.clone())
         .on_click(move |s| {
-            signals.prev_page.set(Page::Library);
             signals.epub_path.set(path.to_string());
+            signals.prev_page.set(Page::Library);
             signals.active_page.set(Page::Reader);
             EventPropagation::Continue
         })

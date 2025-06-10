@@ -47,6 +47,7 @@ pub fn write_thumbnail(lib_path: &str, id: &str, thumbnail: Vec<u8>) {
 pub fn read_book_position(lib_path: &str, id: &str) -> (usize, Vec<usize>) {
     let pos_dir     = format!("{lib_path}/.bookrium/positions");
     let pos_path    = format!("{pos_dir}/{id}");
+    println!("path: {}", pos_dir);
     fs::create_dir_all(&pos_dir).unwrap();
     match fs::read_to_string(&pos_path) {
         Ok(position)   => {

@@ -13,9 +13,17 @@ pub fn add_line(parser: &mut BookElemFactory, mut curr_line: ElemLine, mut elem_
             }
         }
         TextAlign::Center => {
+
             let offset = (parse_state.width - line_width) / 2.0;
             for inline_elem in &mut curr_line.inline_elems {
                 inline_elem.x += offset;
+                match &inline_elem.inline_content {
+                    InlineContent::Image(img) => {
+                        println!("Center: {} {}", inline_elem.x, img.width);
+
+                    }
+                    _ => ()
+                }
             }
         }
         TextAlign::Justify => {

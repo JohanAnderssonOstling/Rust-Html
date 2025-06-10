@@ -1,6 +1,6 @@
 use floem::peniko::Color;
-use floem::prelude::Decorators;
-use floem::style::StyleValue;
+use floem::prelude::{button, Button, Decorators};
+use floem::style::{AlignContent, StyleValue};
 use floem::views::{Label, label};
 use floem_renderer::text::Weight;
 
@@ -24,4 +24,17 @@ pub fn label_style(label: Label, font_size: i32) -> Label {
         .hover(|s| s.background(HOVER_COLOR))
         .text_ellipsis()
         .font_size(font_size))
+}
+
+pub fn create_square_button(text: String) -> Button {
+    button(label(move || text.clone())).style(move |s| s
+        .hover(|s| s.background(HOVER_COLOR))
+        .text_ellipsis()
+        .font_size(20)
+        .width(36)
+        .height(36)
+        .border_radius(8)
+        .justify_center()
+        .align_content(AlignContent::Center)
+    )
 }
