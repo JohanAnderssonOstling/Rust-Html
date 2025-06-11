@@ -216,41 +216,20 @@ impl BookElemFactory {
             let tag_name = child.tag_name().name();
 
             if BLOCK_ELEMENTS.contains(&tag_name) {
-                
-                if inline_items.len() != 0 {
-                    block_elem.add_child(layout_elem_lines(self, inline_items, parse_state));
-                    *index.last_mut().unwrap() += 1;
-                    inline_items = Vec::new();
-                }
-                
-                if tag_name.eq("pre") { block_elem.add_child(self.parse_pre(child, font, style_sheets, parse_state, index.clone())); }
-                else if tag_name.eq("table") {
-                    block_elem.add_child(self.parse_table(child, font, style_sheets, parse_state, index.clone()));
-                }
-                else { block_elem.add_child(self.parse(child, font, style_sheets, parse_state, index.clone())); }
+                self.flush_inline_items(&mut block_elem, &mut inline_items, parse_state, &mut index);
 
+                block_elem.add_child(match tag_name {
+                    "pre"   => self.parse_pre(child, font, style_sheets, parse_state, index.clone()),
+                    "table" => self.parse_table(child, font, style_sheets, parse_state, index.clone()),
+                    _       => self.parse(child, font, style_sheets, parse_state, index.clone())
+                });
                 *index.last_mut().unwrap() += 1;
-            } 
-            else if tag_name.eq("")    { inline_items.extend(self.parse_text(child.text().unwrap_or_default(), font, parse_state, None)); }
-            else if tag_name.eq("img") { inline_items.push(self.parse_img(child,style_sheets, font, &index, parse_state)); }
-            else if tag_name.eq("br") {
-                block_elem.add_child(layout_elem_lines(self, inline_items, parse_state));
-                inline_items = Vec::new();
-                *index.last_mut().unwrap() += 1;
-            } else if tag_name.eq("a") {
-                if let Some(href) = child.attribute("href") { 
-                    inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state, Some(href), &index).0) 
-                } 
-                else { inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state, None, &index).0) }
-            } else { 
-                inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state, None, &index).0); 
             }
-            // println!("Tag name: {}", tag_name);
+            else {
+                self.process_inline_element(child, style_sheets, font, parse_state, &index, &mut inline_items);
+            }
         }
-        if inline_items.len() != 0 {
-            block_elem.add_child(layout_elem_lines(self, inline_items, parse_state));
-            *index.last_mut().unwrap() += 1;
-        }
+        self.flush_inline_items(&mut block_elem, &mut inline_items, parse_state, &mut index);
         //self.curr_y += margins.bottom;
         if node.tag_name().name().eq("li") {
             self.curr_x -= li_block.width;
@@ -260,6 +239,28 @@ impl BookElemFactory {
 
         let block_height = block_elem.children.iter().fold(0., |acc, elem| acc + elem.size.height);
         Elem { size: Size::new(600., block_height + margins.top + margins.bottom), point: init_point, elem_type: ElemType::Block(block_elem) }
+    }
+
+    fn flush_inline_items(&mut self, block_elem: &mut BlockElem, inline_items: &mut Vec<InlineItem>, parse_state: ParseState, index: &mut Vec<usize>) {
+        if !inline_items.is_empty() {
+            block_elem.add_child(layout_elem_lines(self, std::mem::take(inline_items), parse_state));
+            *index.last_mut().unwrap() += 1;
+        }
+    }
+
+    fn process_inline_element(&mut self, child: Node, style_sheets: &Vec<StyleSheet>, font: Attrs, parse_state: ParseState, index: &Vec<usize>, inline_items: &mut
+    Vec<InlineItem>) {
+        let tag_name = child.tag_name().name();
+        match tag_name {
+            "" => inline_items.extend(self.parse_text(child.text().unwrap_or_default(), font, parse_state, None)),
+            "img" => inline_items.push(self.parse_img(child, style_sheets, font, index, parse_state)),
+            "br" => { /* Handle in flush_inline_items */ },
+            "a" => {
+                let href = child.attribute("href");
+                inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state, href, index).0);
+            },
+            _ => inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state, None, index).0),
+        }
     }
 
     pub fn parse_inline(&mut self, node: Node, style_sheets: &Vec<StyleSheet>, mut font: Attrs, mut parse_state: ParseState, href: Option<&str>, index: &Vec<usize>) -> (Vec<InlineItem>, TextAlign) {
