@@ -53,7 +53,7 @@ pub fn dir_view(library_path: &str, root_library_path: &str, signals: Signals) -
     let now = Instant::now();
 
     let book_stack = stack_from_iter(books.into_iter()
-        .map(|book_cover| create_book_cover(book_cover.title, book_cover.cover, book_cover.path, signals.clone()) )
+        .map(|book_cover| create_book_cover(book_cover.title, book_cover.cover, book_cover.path, root_library_path.to_string(), signals.clone()) )
     ).style(move |s| s.gap(40).flex_row().flex_wrap(FlexWrap::Wrap).flex_grow(1.0));
 
     let book_stack_id = book_stack.id();
@@ -78,7 +78,7 @@ pub fn dir_view(library_path: &str, root_library_path: &str, signals: Signals) -
         .into_view()
 }
 
-pub fn create_book_cover(title: String, cover: Option<Vec<u8>>, path: String, signals: Signals) -> Stack {
+pub fn create_book_cover(title: String, cover: Option<Vec<u8>>, epub_path: String, library_path: String, signals: Signals) -> Stack {
     let title_label = label(move || title.clone()).style(|s| s
         .width(200).height(40)
         .font_size(16)
@@ -93,8 +93,9 @@ pub fn create_book_cover(title: String, cover: Option<Vec<u8>>, path: String, si
     
     let cover_image = img(move || cover.clone())
         .on_click(move |s| {
-            signals.epub_path.set(path.to_string());
-            signals.prev_page.set(Page::Library);
+            signals.root_library_path.set(library_path.clone());
+            signals.epub_path.set(epub_path.to_string());
+            signals.prev_page.set(signals.active_page.get());
             signals.active_page.set(Page::Reader);
             EventPropagation::Continue
         })

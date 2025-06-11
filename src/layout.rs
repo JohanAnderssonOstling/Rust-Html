@@ -60,9 +60,11 @@ pub fn layout_elem_lines(parser: &mut BookElemFactory, mut inline_items: Vec<Inl
     let init_point      = Point::new(parser.curr_x, parser.curr_y);
     let mut elem_lines  = ElemLines {height: 0., elem_lines: Vec::new()};
     let mut curr_line   = ElemLine  {height: 0., inline_elems: Vec::new()};
+    let mut width =     0.;
     for mut inline_item in inline_items {
         if inline_item.size.width > parse_state.x + parse_state.width {
             elem_lines          = add_line(parser, curr_line, elem_lines, parse_state);
+
             if let InlineContent::Image(image) = &mut inline_item.inline_content {
                 let scale_factor = inline_item.size.width / (parse_state.x + parse_state.width);
                 image.width = (image.width as f64 / scale_factor) as u16;
@@ -70,8 +72,8 @@ pub fn layout_elem_lines(parser: &mut BookElemFactory, mut inline_items: Vec<Inl
                 inline_item.size.width = inline_item.size.width / scale_factor;
                 inline_item.size.height = inline_item.size.height / scale_factor;
             }
-            let mut new_line    = ElemLine {height: inline_item.size.height, inline_elems: Vec::new()};
 
+            let mut new_line    = ElemLine {height: inline_item.size.height, inline_elems: Vec::new()};
             let inline_elem     = InlineElem {x: 0., inline_content: inline_item.inline_content};
             new_line.inline_elems.push(inline_elem);
             elem_lines          = add_line(parser, new_line, elem_lines, parse_state);

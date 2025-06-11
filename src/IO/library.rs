@@ -6,6 +6,7 @@ use itertools::{Either, Itertools};
 use zip::write::FileOptions;
 
 pub fn get_library(path: &str) -> (Vec<String>, Vec<String>) {
+    println!("path: {path}");
     fs::read_dir(path)
         .unwrap()
         .filter_map(|res| res.ok())

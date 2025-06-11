@@ -599,6 +599,7 @@ impl View for HtmlRenderer {
         }
         if self.copy {
             println!("Clipboard: {}", render_state.selected_text);
+            Clipboard::set_contents(render_state.selected_text).unwrap();
             self.copy = false;
         }
         cx.set_scale(1.0);

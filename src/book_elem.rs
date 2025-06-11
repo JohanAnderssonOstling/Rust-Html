@@ -186,17 +186,32 @@ impl BookElemFactory {
         let mut inline_items: Vec<InlineItem> = Vec::new();
         let init_point = Point::new(self.curr_x, self.curr_y);
         let now = Instant::now();
+
         let (margins, mut parse_state) = resolve_style(style_sheets, &node, &mut font, parse_state);
         self.style_time += (Instant::now() - now).as_nanos();
         parse_state.width -= margins.left + margins.right;
         parse_state.x += margins.left / 2.;
         self.curr_x = parse_state.x;
-        self.curr_y += margins.top;
+        //self.curr_y += margins.top;
         index.push(0);
         if let Some(id) = node.attribute("id") {
             self.locations.insert(id.to_string(), index.clone());
         }
-        if node.tag_name().name().eq("li") { inline_items.extend(self.parse_text("- ", font, parse_state, None)); }
+
+        let mut li_block = Size::default();
+        if node.tag_name().name().eq("li") {
+            inline_items.extend(self.parse_text("- ", font, parse_state, None));
+            li_block = inline_items[0].size;
+
+            block_elem.add_child(layout_elem_lines(self, inline_items, parse_state));
+
+            parse_state.width -= li_block.width;
+            parse_state.x += li_block.width;
+            self.curr_x += li_block.width;
+            self.curr_y -= li_block.height;
+            inline_items = Vec::new();
+
+        }
         for child in node.children() {
             let tag_name = child.tag_name().name();
 
@@ -216,7 +231,7 @@ impl BookElemFactory {
 
                 *index.last_mut().unwrap() += 1;
             } 
-            else if tag_name.eq("") { inline_items.extend(self.parse_text(child.text().unwrap_or_default(), font, parse_state, None)); } 
+            else if tag_name.eq("")    { inline_items.extend(self.parse_text(child.text().unwrap_or_default(), font, parse_state, None)); }
             else if tag_name.eq("img") { inline_items.push(self.parse_img(child,style_sheets, font, &index, parse_state)); }
             else if tag_name.eq("br") {
                 block_elem.add_child(layout_elem_lines(self, inline_items, parse_state));
@@ -236,7 +251,13 @@ impl BookElemFactory {
             block_elem.add_child(layout_elem_lines(self, inline_items, parse_state));
             *index.last_mut().unwrap() += 1;
         }
-        self.curr_y += margins.bottom;
+        //self.curr_y += margins.bottom;
+        if node.tag_name().name().eq("li") {
+            self.curr_x -= li_block.width;
+            parse_state.width += li_block.width;
+            parse_state.x -= li_block.width;
+        }
+
         let block_height = block_elem.children.iter().fold(0., |acc, elem| acc + elem.size.height);
         Elem { size: Size::new(600., block_height + margins.top + margins.bottom), point: init_point, elem_type: ElemType::Block(block_elem) }
     }

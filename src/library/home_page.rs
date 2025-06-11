@@ -117,7 +117,7 @@ fn create_library_card(root_library_path: String, book_paths: Vec<String>, signa
     let header = h_stack((name_label, hamburger_button)).style(move |s| s.justify_center().margin_top(0).margin_bottom(20));
 
     let book_list = stack_from_iter(books.into_iter()
-        .map(|book_cover| create_book_cover(book_cover.title, book_cover.cover, book_cover.path, signals.clone()) )
+        .map(|book_cover| create_book_cover(book_cover.title, book_cover.cover, book_cover.path, library_path.clone(), signals.clone()) )
     ).style(move |s| s.gap(20))
         .scroll().style(move |s| s);
 
