@@ -5,7 +5,7 @@ use crate::book_elem::{BookElemFactory, Elem, ElemLine, ElemLines, ElemType, Inl
 pub fn add_line(parser: &mut BookElemFactory, mut curr_line: ElemLine, mut elem_lines: ElemLines, parse_state: ParseState) -> ElemLines{
     let line_width = parser.curr_x - parse_state.x;
     match parse_state.text_align {
-        TextAlign::Start | TextAlign::Left=> {}
+        TextAlign::Start | TextAlign::Left => {}
         TextAlign::Right | TextAlign::End => {
             let offset = parse_state.width - line_width;
             for inline_elem in &mut curr_line.inline_elems {
@@ -27,6 +27,7 @@ pub fn add_line(parser: &mut BookElemFactory, mut curr_line: ElemLine, mut elem_
             }
         }
         TextAlign::Justify => {
+
             let count = curr_line.inline_elems.len();
             if count > 1 && line_width / parse_state.width > 0.80 {
                 let extra_space = parse_state.width - line_width;
@@ -71,6 +72,7 @@ pub fn layout_elem_lines(parser: &mut BookElemFactory, mut inline_items: Vec<Inl
                 image.height = (image.height as f64 / scale_factor) as u16;
                 inline_item.size.width = inline_item.size.width / scale_factor;
                 inline_item.size.height = inline_item.size.height / scale_factor;
+                parser.curr_x = parse_state.x + parse_state.width;
             }
 
             let mut new_line    = ElemLine {height: inline_item.size.height, inline_elems: Vec::new()};

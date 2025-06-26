@@ -18,6 +18,7 @@ use rayon::prelude::*;
 use rayon::prelude::IntoParallelRefIterator;
 use rbook::{Ebook, Epub};
 use rbook::epub::Toc;
+use regex::Regex;
 use roxmltree::Document;
 use rustc_data_structures::fx::FxHashMap;
 use sha2::{Digest, Sha256};
@@ -25,7 +26,7 @@ use threadpool::ThreadPool;
 
 use crate::book_elem::{BookElemFactory, CharGlyph, Elem, get_size, HTMLPage, ImageElem, ImagePromise, InlineContent, InlineElem, MemUsage, ParseState};
 use crate::glyph_interner::GlyphCache;
-use crate::html_renderer::HtmlRenderer;
+use crate::renderer::HtmlRenderer;
 use crate::IO::epub::{remove_dtd};
 use crate::IO::library::{read_book_position, update_book_path, update_last_read, write_book_position};
 use crate::library::{Page, Signals};
@@ -43,7 +44,12 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
     let sections: Vec<String> = epub.spine().elements().iter()
         .map(|elem| epub.manifest().by_id(elem.name()).unwrap().value().to_string()).collect();
     let html_text: Vec<String> = epub.reader().iter()
-        .map(|cont| cont.unwrap().to_string()).collect();
+        .map(|cont| {
+            let text = cont.unwrap().to_string();
+            let re = Regex::new(r#"(?i)<!DOCTYPE[^>]*>"#).unwrap();
+            let cleaned = re.replace(&text, "").into_owned();
+            cleaned
+        }).collect();
 
     let now = Instant::now();
     let image_map = process_images(&epub);
@@ -60,10 +66,14 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
         .color(Color::rgb8(43, 43, 43))
         ;
     let cache = GlyphCache::new();
-    
+
+
 
     let documents: Vec<Document> = html_text.par_iter()
-        .map(|section| Document::parse(&section).unwrap()).collect();
+        .map(|section| {
+
+            Document::parse(section).unwrap()
+        }).collect();
     let css_strings: Vec<String> = epub.manifest().all_by_media_type("text/css").iter()
         .map(|css_name| epub.read_file(css_name.value()).unwrap())
         .collect();

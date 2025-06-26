@@ -137,6 +137,27 @@ pub enum InlineContent      { Text(Vec<CharGlyph>), Image(ImageElem), Link((Vec<
 pub struct CharGlyph        { pub char: u16, pub x: f32}
 #[derive(Clone)]
 pub struct ImageElem { pub width: u16, pub height: u16, pub image_promise: ImagePromise}
+
+#[derive(Clone, Copy)]
+pub struct ListContext {
+    pub list_type: ListType,
+    pub item_number: usize,
+    pub depth: usize,
+    pub indent_width: f64,
+}
+
+#[derive(Clone, Copy)]
+pub enum ListType {
+    Unordered(BulletStyle),
+    Ordered(NumberStyle),
+    None,
+}
+
+#[derive(Clone, Copy)]
+pub enum BulletStyle { Disc, Circle, Square }
+
+#[derive(Clone, Copy)]  
+pub enum NumberStyle { Decimal, LowerAlpha, UpperAlpha, LowerRoman, UpperRoman }
 pub struct BookElemFactory  { 
     pub curr_x: f64, 
     pub curr_y: f64,
@@ -155,6 +176,8 @@ pub struct ParseState {
     pub text_align: TextAlign,
     pub text_style: floem_renderer::text::Style,
     pub root_font_size: f32,
+    pub list_context: ListContext,
+    pub prefix: &'static str,
 }
 
 impl BookElemFactory {
@@ -166,7 +189,21 @@ impl BookElemFactory {
         self.curr_x = 0.;
         self.curr_y = 0.;
         self.base_path = file_path;
-        let parse_state = ParseState { x: 0., width: 600., font_weight: 400, text_align: TextAlign::Left, root_font_size: font.font_size, text_style: floem_renderer::text::Style::Normal };
+        let parse_state = ParseState { 
+            x: 0., 
+            width: 600., 
+            font_weight: 400, 
+            text_align: TextAlign::Left, 
+            root_font_size: font.font_size, 
+            text_style: floem_renderer::text::Style::Normal,
+            prefix: "",
+            list_context: ListContext { 
+                list_type: ListType::None, 
+                item_number: 0, 
+                depth: 0, 
+                indent_width: 0.0 
+            }
+        };
 
         for child in node.children() {
             if child.tag_name().name().eq("body") {
@@ -192,33 +229,25 @@ impl BookElemFactory {
         parse_state.width -= margins.left + margins.right;
         parse_state.x += margins.left / 2.;
         self.curr_x = parse_state.x;
-        //self.curr_y += margins.top;
+        self.curr_y += margins.top;
         index.push(0);
         if let Some(id) = node.attribute("id") {
             self.locations.insert(id.to_string(), index.clone());
         }
 
-        let mut li_block = Size::default();
-        if node.tag_name().name().eq("li") {
-            inline_items.extend(self.parse_text("- ", font, parse_state, None));
-            li_block = inline_items[0].size;
-
-            block_elem.add_child(layout_elem_lines(self, inline_items, parse_state));
-
-            parse_state.width -= li_block.width;
-            parse_state.x += li_block.width;
-            self.curr_x += li_block.width;
-            self.curr_y -= li_block.height;
-            inline_items = Vec::new();
-
-        }
         for child in node.children() {
             let tag_name = child.tag_name().name();
 
             if BLOCK_ELEMENTS.contains(&tag_name) {
-                self.flush_inline_items(&mut block_elem, &mut inline_items, parse_state, &mut index);
+                self.flush_inline_items(&mut block_elem, font, &mut inline_items, parse_state, &mut index);
 
                 block_elem.add_child(match tag_name {
+                    "ul" | "ol" => self.parse_list(child, font, style_sheets, parse_state, index.clone()),
+                    "li" => {
+                        parse_state.prefix = "-\t";
+                        self.parse(child, font, style_sheets, parse_state, index.clone())
+                        //self.parse_list_item(child, font, style_sheets, parse_state, index.clone())
+                    },
                     "pre"   => self.parse_pre(child, font, style_sheets, parse_state, index.clone()),
                     "table" => self.parse_table(child, font, style_sheets, parse_state, index.clone()),
                     _       => self.parse(child, font, style_sheets, parse_state, index.clone())
@@ -229,20 +258,18 @@ impl BookElemFactory {
                 self.process_inline_element(child, style_sheets, font, parse_state, &index, &mut inline_items);
             }
         }
-        self.flush_inline_items(&mut block_elem, &mut inline_items, parse_state, &mut index);
-        //self.curr_y += margins.bottom;
-        if node.tag_name().name().eq("li") {
-            self.curr_x -= li_block.width;
-            parse_state.width += li_block.width;
-            parse_state.x -= li_block.width;
-        }
+        self.flush_inline_items(&mut block_elem, font, &mut inline_items, parse_state, &mut index);
+        self.curr_y += margins.bottom;
 
         let block_height = block_elem.children.iter().fold(0., |acc, elem| acc + elem.size.height);
         Elem { size: Size::new(600., block_height + margins.top + margins.bottom), point: init_point, elem_type: ElemType::Block(block_elem) }
     }
 
-    fn flush_inline_items(&mut self, block_elem: &mut BlockElem, inline_items: &mut Vec<InlineItem>, parse_state: ParseState, index: &mut Vec<usize>) {
+    fn flush_inline_items(&mut self, block_elem: &mut BlockElem, font: Attrs, inline_items: &mut Vec<InlineItem>, parse_state: ParseState, index: &mut Vec<usize>) {
         if !inline_items.is_empty() {
+            if parse_state.prefix != "" {
+                inline_items.insert(0, self.parse_text(parse_state.prefix, font, parse_state, None).first().unwrap().clone())
+            }
             block_elem.add_child(layout_elem_lines(self, std::mem::take(inline_items), parse_state));
             *index.last_mut().unwrap() += 1;
         }
@@ -465,6 +492,122 @@ impl BookElemFactory {
         inline_items
     }
 
+    fn parse_list(&mut self, node: Node, font: Attrs, style_sheets: &Vec<StyleSheet>, mut parse_state: ParseState, mut index: Vec<usize>) -> Elem {
+        let list_type = match node.tag_name().name() {
+            "ul" => ListType::Unordered(BulletStyle::Disc),
+            "ol" => ListType::Ordered(NumberStyle::Decimal),
+            _ => unreachable!(),
+        };
+        let init_point = Point::new(self.curr_x, self.curr_y);
+
+        let mut list_context = parse_state.list_context;
+        list_context.list_type = list_type;
+        list_context.indent_width = 20.0 * list_context.depth as f64;
+        list_context.depth += 1;
+        list_context.item_number = 0;
+
+        parse_state.list_context = list_context;
+        parse_state.width -= list_context.indent_width;
+        parse_state.x += list_context.indent_width;
+        self.curr_x = parse_state.x;
+        self.parse(node, font, style_sheets, parse_state, index)
+            /*
+
+
+        let mut block_elem = BlockElem { children: Vec::new(), total_child_count: 0 };
+
+        for child in node.children() {
+            parse_state.list_context.item_number += 1;
+            block_elem.add_child(self.parse_list_item(child, font, style_sheets, parse_state, index.clone()));
+            *index.last_mut().unwrap() += 1;
+        }
+        let block_height = block_elem.children.iter().fold(0., |acc, elem| acc + elem.size.height);
+        Elem { size: Size::new(parse_state.width, block_height), point: init_point, elem_type: ElemType::Block(block_elem) }
+*/
+    }
+    
+    fn parse_list_item(&mut self, node: Node, font: Attrs, style_sheets: &Vec<StyleSheet>, mut parse_state: ParseState, index: Vec<usize>) -> Elem {
+        let mut list_context = parse_state.list_context;
+
+        let marker = self.generate_list_marker(list_context, font, parse_state);
+        
+        let mut block_elem = BlockElem { children: Vec::new(), total_child_count: 0 };
+        let marker_elem = layout_elem_lines(self, vec![marker.clone()], parse_state);
+        block_elem.add_child(marker_elem);
+        
+        //parse_state.width -= marker.size.width;
+        parse_state.x += marker.size.width;
+        //self.curr_x += marker.size.width;
+        self.curr_y -= marker.size.height;
+
+        let mut content = self.parse(node, font, style_sheets, parse_state, index);
+
+        block_elem.add_child(content);
+
+        let total_height = block_elem.children.iter().fold(0., |acc, elem| acc + elem.size.height);
+
+        parse_state.width += marker.size.width;
+        parse_state.x -= marker.size.width;
+        Elem { 
+            size: Size::new(parse_state.width + marker.size.width, total_height), 
+            point: Point::new(self.curr_x, self.curr_y),
+            elem_type: ElemType::Block(block_elem) 
+        }
+
+
+    }
+    
+    fn generate_list_marker(&mut self, context: ListContext, font: Attrs, parse_state: ParseState) -> InlineItem {
+        let marker_text = match context.list_type {
+            ListType::Unordered(BulletStyle::Disc) => "• ".to_string(),
+            ListType::Unordered(BulletStyle::Circle) => "◦ ".to_string(),
+            ListType::Unordered(BulletStyle::Square) => "▪ ".to_string(),
+            ListType::Ordered(NumberStyle::Decimal) => format!("{}. ", context.item_number),
+            ListType::Ordered(NumberStyle::LowerAlpha) => format!("{}. ", self.to_alpha_lower(context.item_number)),
+            ListType::Ordered(NumberStyle::UpperAlpha) => format!("{}. ", self.to_alpha_upper(context.item_number)),
+            ListType::Ordered(NumberStyle::LowerRoman) => format!("{}. ", self.to_roman_lower(context.item_number)),
+            ListType::Ordered(NumberStyle::UpperRoman) => format!("{}. ", self.to_roman_upper(context.item_number)),
+            ListType::None => " ".to_string(),
+        };
+        
+        let mut inline_items = self.parse_text(&marker_text, font, parse_state, None);
+        inline_items.into_iter().next().unwrap_or_else(|| {
+            InlineItem { 
+                size: Size::new(0.0, 0.0), 
+                inline_content: InlineContent::Text(Vec::new()) 
+            }
+        })
+    }
+    
+    fn to_alpha_lower(&self, num: usize) -> char {
+        if num == 0 || num > 26 { 'a' } else { (b'a' + (num - 1) as u8) as char }
+    }
+    
+    fn to_alpha_upper(&self, num: usize) -> char {
+        if num == 0 || num > 26 { 'A' } else { (b'A' + (num - 1) as u8) as char }
+    }
+    
+    fn to_roman_lower(&self, num: usize) -> String {
+        self.to_roman(num).to_lowercase()
+    }
+    
+    fn to_roman_upper(&self, num: usize) -> String {
+        self.to_roman(num)
+    }
+    
+    fn to_roman(&self, mut num: usize) -> String {
+        let vals = [1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1];
+        let numerals = ["M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I"];
+        let mut result = String::new();
+        
+        for (i, &val) in vals.iter().enumerate() {
+            while num >= val {
+                result.push_str(numerals[i]);
+                num -= val;
+            }
+        }
+        result
+    }
 
 }
 

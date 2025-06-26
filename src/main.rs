@@ -5,7 +5,7 @@ use rbook::Ebook;
 
 use crate::library::page_navigation_view;
 
-mod html_renderer;
+
 mod epub_reader;
 mod book_elem;
 mod glyph_cache;
@@ -19,6 +19,7 @@ mod parser;
 mod toc;
 mod table_parser;
 mod pre_parser;
+mod renderer;
 
 fn app_view() -> impl View {
     /*let mut epub_renderer = EpubReader::new("/home/johan/Hem/Downloads/A Concise History of Switzerland.epub");
