@@ -26,10 +26,11 @@ use threadpool::ThreadPool;
 
 use crate::book_elem::{BookElemFactory, CharGlyph, Elem, get_size, HTMLPage, ImageElem, ImagePromise, InlineContent, InlineElem, MemUsage, ParseState};
 use crate::glyph_interner::GlyphCache;
-use crate::renderer::HtmlRenderer;
+
 use crate::IO::epub::{remove_dtd};
 use crate::IO::library::{read_book_position, update_book_path, update_last_read, write_book_position};
 use crate::library::{Page, Signals};
+use crate::renderer::html_renderer::HtmlRenderer;
 use crate::toc::{hierarchical_toc_entry, toc_view, TocEntry};
 
 pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signals: Signals) -> impl View {
