@@ -17,10 +17,9 @@ use sha2::Digest;
 
 use crate::book_elem::{CharGlyph, Elem, ElemLine, ElemType, HTMLPage, InlineContent};
 use crate::glyph_interner::GlyphCache;
-use crate::renderer::navigation::{Navigator, NavigationState};
 
 #[derive(Clone)]
-pub(crate) struct RenderState {
+struct RenderState {
     x: f64,
     y: f64,
     col_index: f32,
@@ -28,16 +27,15 @@ pub(crate) struct RenderState {
     terminate: bool,
     selected_text: String,
     first_line_rendered: bool,
-    pub(crate) selection: Option<Selection>,
-    clicked_link: Option<String>,
+    selection: Option<Selection>
 }
 
 #[derive(Clone)]
-pub struct Selection {
-    pub(crate) start_col: usize,
-    pub(crate) end_col: usize,
-    pub(crate) start_selection: Point,
-    pub(crate) end_selection: Point,
+struct Selection {
+    start_col: usize,
+    end_col: usize,
+    start_selection: Point,
+    end_selection: Point,
 }
 
 impl Selection {
@@ -49,8 +47,14 @@ impl Selection {
 pub struct HtmlRenderer {
     id: ViewId,
 
-    navigator: Navigator,
-    nav_state: NavigationState,
+    read_current_url: RwSignal<String>,
+    pages: HashMap<String, HTMLPage>,
+
+    start_index: RwSignal<Vec<usize>>,
+    end_index: Vec<usize>,
+
+    start_elem_index: RwSignal<usize>,
+    end_elem_index: RwSignal<usize>,
 
     size: Size,
     point: Point,
@@ -62,7 +66,12 @@ pub struct HtmlRenderer {
 
     glyph_cache : GlyphCache,
 
+    start_offset_y: f64,
     end_offset_y: f64,
+
+    render_forward: bool,
+    get_go_on: ReadSignal<bool>,
+    at_ends: WriteSignal<i8>,
 
     line_reader_assist_x_index: isize,
     line_reader_assist_y_index: isize,
@@ -82,61 +91,184 @@ pub struct HtmlRenderer {
 impl HtmlRenderer {
 
     pub fn new(start_index: RwSignal<Vec<usize>>, glyph_cache: GlyphCache, pages: HashMap<String, HTMLPage>, read_current_url: RwSignal<String>, at_ends: WriteSignal<i8>, get_go_on: ReadSignal<bool>) -> Self{
-        let navigator = Navigator::new(
-            pages,
-            read_current_url,
-            start_index,
-            RwSignal::new(0),
-            RwSignal::new(0),
-            at_ends,
-            get_go_on,
-        );
-        let nav_state = NavigationState::default();
-        
         let mut html_renderer = HtmlRenderer {
-            id: ViewId::new(),
-            navigator,
-            nav_state,
-            col_gap: 0., col_count: 0., col_width: 600., orig_col_width: 600., 
-            size: Size::default(), point: Point::default(), end_offset_y: 0.,
-            scale: 1.0, 
-            glyph_cache,
+            id: ViewId::new(), start_index, end_index: Vec::new(),
+            start_elem_index: RwSignal::new(0), end_elem_index: RwSignal::new(0),
+            col_gap: 0., col_count: 0., col_width: 600., orig_col_width: 600.,
+            size: Size::default(), point: Point::default(), start_offset_y: 0., end_offset_y: 0.,
+            render_forward: true, scale: 1.0,
+            glyph_cache, pages,
+            read_current_url, get_go_on, at_ends,
             line_reader_assist_x_index: -1, line_reader_assist_y_index: -1,
             click_location: None, press_location: None, move_location: Point::default(),
             copy: false, selection_active: false, drag_in_progress: false, key_press: false,
-            clicked_link: None,
         };
         html_renderer = html_renderer.keyboard_navigable();
         html_renderer
     }
 
-    pub(crate) fn get_col_index(&self, x: f64) -> usize {
+    fn get_col_index(&self, x: f64) -> usize {
         ((x) / (self.col_width + self.col_gap)).floor() as usize
     }
-    
+
+
+    fn get_selection(&self) -> Option<Selection> {
+        if !self.selection_active {return None}
+        let press_x         = self.press_location.unwrap().x;
+        let press_y         = self.press_location.unwrap().y;
+        let press_col_index = self.get_col_index(press_x);
+        let move_x          = self.move_location.x;
+        let move_y          = self.move_location.y;
+        let move_col_index  = self.get_col_index(move_x);
+        if press_col_index < move_col_index {return Some(Selection::new(press_col_index, move_col_index, self.press_location.unwrap(), self.move_location))}
+        if press_col_index > move_col_index {return Some(Selection::new(move_col_index, press_col_index, self.move_location, self.press_location.unwrap()))}
+        if press_y         < move_y         {return Some(Selection::new(press_col_index, move_col_index, self.press_location.unwrap(), self.move_location))}
+        if press_y         > move_y         {return Some(Selection::new(move_col_index, press_col_index, self.move_location, self.press_location.unwrap()))}
+        return Some(Selection::new(move_col_index, press_col_index, self.move_location, self.press_location.unwrap()))
+    }
+
+    fn hit(&self, render_state: &RenderState, gx0: f64, gy0: f64, gx1: f64, gy1: f64,) -> bool{
+        let glyph_col_index = self.get_col_index(gx0);
+        let selection = render_state.selection.as_ref().unwrap();
+        // Middle column
+        if selection.start_col < glyph_col_index && glyph_col_index < selection.end_col {
+            return true;
+        }
+        let is_first_col        = selection.start_col == glyph_col_index;
+        let is_last_col         = selection.end_col == glyph_col_index;
+        let is_first_line       = gy0 < selection.start_selection.y && gy1 > selection.start_selection.y;
+        let is_last_line        = gy0 < selection.end_selection.y && gy1 > selection.end_selection.y;
+        let is_after_first_line = gy0 > selection.start_selection.y;
+        let is_before_last_line = gy0 < selection.end_selection.y;
+        let is_first_x          = gx1 >= selection.start_selection.x;
+        let is_last_x           = gx1 <= selection.end_selection.x;
+        // Single column
+        if is_first_col && is_last_col {
+            // Single line
+            if is_first_line && is_last_line {
+                let x_min = selection.start_selection.x.min(selection.end_selection.x);
+                let x_max = selection.start_selection.x.max(selection.end_selection.x);
+                if gx1 > x_min && gx1 < x_max {return true}
+            }
+            else if is_first_line {
+                if is_first_x {return true};
+            }
+            else if is_last_line {
+                if is_last_x {return true}
+            }
+            else if is_after_first_line && is_before_last_line {
+                return true;
+            }
+        }
+
+        // First column
+        else if is_first_col {
+            if is_first_line {
+                if is_first_x {return true}
+            }
+            else if is_after_first_line {
+                return true;
+            }
+        }
+        //End column
+        else if is_last_col {
+            if is_last_line {
+                if is_last_x {return true}
+            }
+            else if is_before_last_line {
+                return true
+            }
+        }
+
+        false
+    }
+
     pub fn next(&mut self) {
-        self.nav_state = self.navigator.next(&self.nav_state);
+        self.render_forward = true;
+        let current_url     = self.read_current_url.get();
+        let root_elem       = &self.pages.get(&current_url).unwrap().root;
+        let last_index      = root_elem.get_last_index();
+        //if self.end_index.len() != 0 && self.end_index[0] == 1 {
+        println!("Last index: {:#?}\n End index {:#?}", last_index, self.end_index);
+        if self.end_index.eq(&last_index) || (self.end_index.len() != 0 && self.end_index[0] == 1)  {
+            self.at_ends.set(1);
+            if !self.get_go_on.get() {return}
+            self.start_index.set(Vec::new());
+            self.start_offset_y = 0.;
+            self.start_elem_index.set(0);
+            self.end_elem_index.set(0);
+            self.end_index = Vec::new();
+            return;
+        }
+        self.at_ends.set(0);
+        self.start_index.set(self.end_index.clone());
+        self.start_elem_index.set(self.end_elem_index.get_untracked());
     }
 
-    pub fn prev(&mut self) {
-        self.nav_state = self.navigator.prev(&self.nav_state);
+    pub fn prev(&mut self ) {
+        self.render_forward = false;
+        if self.start_index.get().len() == 0 {
+            self.at_ends.set(-1);
+            if !self.get_go_on.get() {return}
+            self.start_elem_index.set(0);
+            self.end_elem_index.set(0);
+            self.goto_last();
+            return
+        }
+        self.at_ends.set(0);
+        self.end_index      = self.start_index.get_untracked();
+        self.end_elem_index.set(self.start_elem_index.get_untracked());
     }
 
-    pub fn goto(&mut self, link: &str) {
-        self.nav_state = self.navigator.goto(link);
+    pub fn goto(&self, link: &String) {
+        if link.contains("www") || link.contains("http") {
+            open::that(link).unwrap();
+            return;
+        }
+        println!("Clicked link: {link}");
+        let parts: Vec<&str> = link.split("#").collect();
+        let mut new_url = parts[0].to_string();
+        let current_url = self.read_current_url.get_untracked();
+        let mut paths: Vec<&str> = current_url.split("/").collect();
+        if paths.len() > 1 {
+            println!("Len: {}", paths.len());
+            paths.pop().unwrap();
+            let path = paths.join("/");
+            new_url = format!("{path}/{new_url}")
+        }
+        println!("Current url: {current_url}\t New url: {new_url}");
+
+        let document = &self.pages.get(&new_url).unwrap();
+        self.read_current_url.set(new_url);
+        self.start_elem_index.set(0);
+        self.end_elem_index.set(0);
+        if parts.len() == 1 {
+            self.start_index.set(Vec::new());
+            return;
+        }
+        let new_index = parts[1].to_string();
+        match document.locations.get(&new_index) {
+            None => {self.start_index.set(Vec::new())}
+            Some(new_index) => {self.start_index.set(new_index.clone())}
+        }
     }
 
     pub fn goto_last(&mut self) {
-        self.nav_state = self.navigator.goto_last();
+        let current_url     = self.read_current_url.get();
+        let root_elem       = &self.pages.get(&current_url).unwrap().root;
+        let last_index      = root_elem.get_last_index();
+        self.end_index      = last_index;
+        self.end_elem_index.set(99999999);
+        self.render_forward = false;
     }
 
     fn resolve_point(&self, point: Point, elem_height: f64, mut render_state: RenderState) -> (RenderState, Point) {
-        let mut y = point.y + render_state.y - self.nav_state.start_offset_y;
+        let mut y = point.y + render_state.y - self.start_offset_y;
         let mut col_index = (y / self.size.height ).floor();
         y = y - col_index * self.size.height;
         if y + elem_height > self.size.height {
             render_state.col_index += 1.0;
-            if self.nav_state.render_forward {
+            if self.render_forward {
                 col_index += 1.0;
                 render_state.y += self.size.height - y;
                 y = 0.;
@@ -147,8 +279,8 @@ impl HtmlRenderer {
             }
         }
         let x = (self.col_gap + col_index * (self.col_width+ self.col_gap)) as f64 + point.x;
-        if self.nav_state.render_forward && x + 1.0  >= self.size.width { render_state.terminate = true; }
-        if !self.nav_state.render_forward && x < 0.               {render_state.terminate = true; };
+        if self.render_forward && x + 1.0  >= self.size.width { render_state.terminate = true; }
+        if !self.render_forward && x < 0.               {render_state.terminate = true; };
         (render_state, Point::new(x, y))
     }
 
@@ -207,7 +339,8 @@ impl HtmlRenderer {
                             if let Some(location) = self.click_location {
                                 if x <= location.x && location.x <= x1 && elem_point.y <= location.y
                                     && location.y <= elem_point.y + glyph.size().height {
-                                    render_state.clicked_link = Some(link.clone());
+                                    self.goto(link);
+
                                 }
                                 self.id.get_combined_style().cursor(CursorStyle::Pointer) ;
                                 self.id.request_style();
@@ -272,7 +405,7 @@ impl HtmlRenderer {
                 let mut current_elem_index: usize = lines.elem_lines.iter().map(|s| s.inline_elems.len()).sum();
                 for line in lines.elem_lines.iter().rev() {
                     line_offset_y -= line.height;
-                    if self.nav_state.end_elem_index == 0 || self.nav_state.end_elem_index > current_elem_index - line.inline_elems.len() {render_state.first_line_rendered = true;}
+                    if self.end_elem_index.get() == 0 || self.end_elem_index.get() > current_elem_index - line.inline_elems.len() {render_state.first_line_rendered = true;}
                     if render_state.first_line_rendered {
 
                         render_state = self.paint_line(cx, &elem, &line, line_offset_y, render_state, true);
@@ -314,7 +447,7 @@ impl HtmlRenderer {
                 line_offset_y = 0.;
                 let mut current_elem_index = 0;
                 for line in lines.elem_lines.iter() {
-                    if self.nav_state.start_elem_index < current_elem_index + line.inline_elems.len() {render_state.first_line_rendered = true}
+                    if self.start_elem_index.get() < current_elem_index + line.inline_elems.len() {render_state.first_line_rendered = true}
                     if render_state.first_line_rendered  {
                         render_state  = self.paint_line(cx, &elem, &line, line_offset_y, render_state , true);
                         if render_state .terminate       { return (render_state, index, current_elem_index);}
@@ -424,69 +557,57 @@ impl View for HtmlRenderer {
     }
     fn paint(&mut self, cx: &mut PaintCx) {
         let now = Instant::now();
-        let current_url = self.navigator.get_current_url();
-        let root_elem = &self.navigator.get_pages().get(&current_url).unwrap().root;
-        self.size = self.id.get_size().unwrap();
-        self.size.width /= self.scale;
-        self.size.height /= self.scale;
-        self.col_count = (self.size.width / self.col_width).floor();
-        self.col_gap = (self.size.width - self.col_count * self.col_width) / (self.col_count + 1.);
-        
-        let mut render_state = RenderState {
-            x: 0., y: 0., col_index: 0., terminate: false, line_index: 0, 
-            selected_text: String::new(), first_line_rendered: false, 
-            selection: self.get_selection(), clicked_link: None,
-        };
-        
-        let mut start_index = self.nav_state.start_index.clone();
-        let mut start_elem_index = self.nav_state.start_elem_index;
-        let mut end_elem_index = self.nav_state.end_elem_index;
-        
-        let scaling_offset_x = self.point.x / self.scale - self.point.x;
-        let scaling_offset_y = self.point.y / self.scale - self.point.y;
+        let root_elem           = &self.pages.get(&self.read_current_url.get()).unwrap().root;
+        self.size               = self.id.get_size().unwrap();
+        self.size.width         /= self.scale;
+        self.size.height        /= self.scale;
+        self.col_count          = (self.size.width / self.col_width).floor();
+        self.col_gap            = (self.size.width - self.col_count * self.col_width) / (self.col_count + 1.);
+        //self.col_gap = 0.;
+        let mut render_state    = RenderState {x: 0., y: 0., col_index: 0., terminate: false, line_index: 0, selected_text: String::new(), first_line_rendered: false, selection: self.get_selection()};
+        let mut start_index     = self.start_index.get();
+        let mut start_elem_index = self.start_elem_index.get_untracked();
+        let mut end_elem_index  = self.end_elem_index.get_untracked();
+        let scaling_offset_x    = self.point.x / self.scale - self.point.x;
+        let scaling_offset_y    = self.point.y / self.scale - self.point.y;
         cx.set_scale(self.scale);
         cx.offset((scaling_offset_x, scaling_offset_y));
-        
-        if self.nav_state.render_forward {
-            let first_elem = root_elem.get_elem(&start_index, 0);
-            self.nav_state.start_offset_y = first_elem.get_y(start_elem_index);
-            (render_state, self.nav_state.end_index, end_elem_index) = self.paint_recursive(cx, root_elem, render_state, 0, start_index);
-            self.nav_state.end_elem_index = end_elem_index;
+        if self.render_forward {
+                let first_elem      = root_elem.get_elem(&start_index, 0);
+                self.start_offset_y = first_elem.get_y(self.start_elem_index.get_untracked());
+            (render_state, self.end_index, end_elem_index) = self.paint_recursive(cx, root_elem, render_state, 0, start_index);
+            self.end_elem_index.set(end_elem_index);
         }
         else {
-            let last_elem = root_elem.get_elem(&self.nav_state.end_index, 0);
-            let content_size = self.size.height * self.col_count;
-            self.nav_state.start_offset_y = last_elem.get_y(end_elem_index) - content_size + 1.;
+            let last_elem       = root_elem.get_elem(&self.end_index, 0);
+            let content_size    = self.size.height * self.col_count;
+            self.start_offset_y = last_elem.get_y(self.end_elem_index.get_untracked()) - content_size + 1.;
 
-            if self.nav_state.start_offset_y < 0. {
-                self.nav_state.start_index = Vec::new();
+            if self.start_offset_y < 0. {
+                self.start_index.set( Vec::new());
                 start_index = Vec::new();
-                self.nav_state.start_offset_y = 0.;
-                self.nav_state.start_elem_index = 0;
-                self.nav_state.end_elem_index = 0;
-                self.nav_state.render_forward = true;
-                (render_state, self.nav_state.end_index, end_elem_index) = self.paint_recursive(cx, root_elem, render_state, 0, start_index);
-                self.nav_state.end_elem_index = end_elem_index;
+                self.start_offset_y = 0.;
+                self.start_elem_index.set(0);
+                self.end_elem_index.set(0);
+                self.render_forward = true;
+                (render_state, self.end_index, end_elem_index) = self.paint_recursive(cx, root_elem, render_state, 0, start_index);
+                self.end_elem_index.set(end_elem_index);
             }
             else {
-                (render_state, start_index, start_elem_index) = self.paint_backward(cx, root_elem, render_state, 0, self.nav_state.end_index.clone());
-                self.nav_state.start_elem_index = start_elem_index;
-                self.nav_state.start_index = start_index;
+                (render_state, start_index, start_elem_index) = self.paint_backward(cx, root_elem, render_state, 0, self.end_index.clone());
+                self.start_elem_index.set(start_elem_index);
+                self.start_index.set(start_index);
             }
         }
-        
         if self.copy {
             println!("Clipboard: {}", render_state.selected_text);
             Clipboard::set_contents(render_state.selected_text).unwrap();
             self.copy = false;
         }
-        
-        if let Some(link) = render_state.clicked_link {
-            self.nav_state = self.navigator.goto(&link);
-        }
-        
         cx.set_scale(1.0);
         self.click_location = None;
+        //println!("Render time: {}", now.elapsed().as_micros())
+
     }
 
 }
