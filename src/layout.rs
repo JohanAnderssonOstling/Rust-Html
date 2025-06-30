@@ -2,7 +2,7 @@ use floem::kurbo::{Point, Size};
 use lightningcss::properties::text::TextAlign;
 use crate::book_elem::{BookElemFactory, Elem, ElemLine, ElemLines, ElemType, InlineContent, InlineElem, InlineItem, ParseState};
 
-pub fn add_line(parser: &mut BookElemFactory, mut curr_line: ElemLine, mut elem_lines: ElemLines, parse_state: ParseState) -> ElemLines{
+pub fn add_line(parser: &mut BookElemFactory, mut curr_line: ElemLine, mut elem_lines: ElemLines, parse_state: &ParseState) -> ElemLines{
     let line_width = parser.curr_x - parse_state.x;
     match parse_state.text_align {
         TextAlign::Start | TextAlign::Left => {}
@@ -57,14 +57,14 @@ pub fn add_line(parser: &mut BookElemFactory, mut curr_line: ElemLine, mut elem_
     elem_lines
 }
 
-pub fn layout_elem_lines(parser: &mut BookElemFactory, mut inline_items: Vec<InlineItem>, parse_state: ParseState) -> Elem{
+pub fn layout_elem_lines(parser: &mut BookElemFactory, mut inline_items: Vec<InlineItem>, parse_state: &ParseState) -> Elem{
     let init_point      = Point::new(parser.curr_x, parser.curr_y);
     let mut elem_lines  = ElemLines {height: 0., elem_lines: Vec::new()};
     let mut curr_line   = ElemLine  {height: 0., inline_elems: Vec::new()};
     let mut width =     0.;
     for mut inline_item in inline_items {
         if inline_item.size.width > parse_state.x + parse_state.width {
-            elem_lines          = add_line(parser, curr_line, elem_lines, parse_state);
+            elem_lines          = add_line(parser, curr_line, elem_lines, &parse_state);
 
             if let InlineContent::Image(image) = &mut inline_item.inline_content {
                 let scale_factor = inline_item.size.width / (parse_state.x + parse_state.width);
@@ -78,12 +78,12 @@ pub fn layout_elem_lines(parser: &mut BookElemFactory, mut inline_items: Vec<Inl
             let mut new_line    = ElemLine {height: inline_item.size.height, inline_elems: Vec::new()};
             let inline_elem     = InlineElem {x: 0., inline_content: inline_item.inline_content};
             new_line.inline_elems.push(inline_elem);
-            elem_lines          = add_line(parser, new_line, elem_lines, parse_state);
+            elem_lines          = add_line(parser, new_line, elem_lines, &parse_state);
             curr_line           = ElemLine {height: 0., inline_elems: Vec::new()};
             continue
         }
         else if parser.curr_x + inline_item.size.width > parse_state.width {
-            elem_lines          = add_line(parser, curr_line, elem_lines, parse_state);
+            elem_lines          = add_line(parser, curr_line, elem_lines, &parse_state);
             curr_line           = ElemLine {height: 0., inline_elems: Vec::new()};
         }
         curr_line.height    = f64::max(curr_line.height, inline_item.size.height);
@@ -91,6 +91,6 @@ pub fn layout_elem_lines(parser: &mut BookElemFactory, mut inline_items: Vec<Inl
         parser.curr_x         += inline_item.size.width;
         curr_line.inline_elems.push(inline_elem);
     }
-    elem_lines = add_line(parser, curr_line, elem_lines, parse_state);
+    elem_lines = add_line(parser, curr_line, elem_lines, &parse_state);
     Elem {size: Size::new(parse_state.width, elem_lines.height), point: init_point, elem_type: ElemType::Lines(elem_lines)}
 }

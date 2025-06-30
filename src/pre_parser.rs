@@ -2,7 +2,7 @@ use std::time::Instant;
 use floem::kurbo::{Point, Size};
 use floem_renderer::text::Attrs;
 use lightningcss::stylesheet::StyleSheet;
-use roxmltree::Node;
+use roxmltree::{Document, Node};
 use crate::book_elem::{BookElemFactory, CharGlyph, Elem, ElemLine, ElemLines, ElemType, InlineContent, InlineElem, ParseState};
 use crate::style::resolve_style;
 
@@ -14,6 +14,7 @@ impl BookElemFactory {
         style_sheets: &Vec<StyleSheet>,
         parse_state: ParseState,
         index: Vec<usize>,
+        document: &Document,
     ) -> Elem {
         let init_point = Point::new(self.curr_x, self.curr_y);
         let mut lines: Vec<ElemLine> = Vec::new();
@@ -22,7 +23,7 @@ impl BookElemFactory {
         let mut max_height = 0.0;
 
         let now = Instant::now();
-        let (_, parse_state) = resolve_style(style_sheets, &node, &mut font, parse_state);
+        let (_, parse_state) = resolve_style(style_sheets, &node, &mut font, parse_state, document);
         self.style_time += (Instant::now() - now).as_nanos();
 
         fn recurse_pre<'a>(
@@ -30,7 +31,7 @@ impl BookElemFactory {
             node: Node<'a, 'a>,
             font: Attrs,
             style_sheets: &Vec<StyleSheet>,
-            parse_state: ParseState,
+            parse_state: &ParseState,
             x: &mut f64,
             max_height: &mut f64,
             current_line: &mut Vec<InlineElem>,
@@ -48,7 +49,7 @@ impl BookElemFactory {
                             *max_height = 0.0;
                             continue;
                         }
-                        let (text_layout, index) = factory.cache.get_or_insert(ch, font, &parse_state);
+                        let (text_layout, index) = factory.cache.get_or_insert(ch, font, parse_state);
                         *max_height = max_height.max(text_layout.size().height);
                         current_line.push(InlineElem {
                             x: *x,
@@ -60,6 +61,7 @@ impl BookElemFactory {
             } else {
                 for child in node.children() {
                     if child.is_element() {
+                        println!("pre: {}", child.tag_name().name());
                         recurse_pre(factory, child, font, style_sheets, parse_state, x, max_height, current_line, lines);
                     }
                 }
@@ -71,7 +73,7 @@ impl BookElemFactory {
             node,
             font,
             style_sheets,
-            parse_state,
+            &parse_state,
             &mut x,
             &mut max_height,
             &mut current_line,

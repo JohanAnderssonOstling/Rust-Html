@@ -10,7 +10,7 @@ use floem_renderer::text::Attrs;
 use lightningcss::properties::text::TextAlign;
 use lightningcss::stylesheet::StyleSheet;
 use regex::Regex;
-use roxmltree::Node;
+use roxmltree::{Document, Node, NodeId};
 use rustc_data_structures::fx::FxHashMap;
 use sha2::Digest;
 
@@ -168,7 +168,7 @@ pub struct BookElemFactory  {
     pub root_font_size: f32,
     pub style_time: u128,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct ParseState {
     pub x: f64,
     pub width: f64,
@@ -178,6 +178,7 @@ pub struct ParseState {
     pub root_font_size: f32,
     pub list_context: ListContext,
     pub prefix: &'static str,
+    pub ancestors: Vec<NodeId>,
 }
 
 impl BookElemFactory {
@@ -185,29 +186,31 @@ impl BookElemFactory {
         BookElemFactory { curr_x: 0., curr_y: 0., cache, images, base_path: String::new(), locations: FxHashMap::default(), root_font_size: font.font_size, style_time: 0 }
     }
 
-    pub fn parse_root(&mut self, node: Node, font: Attrs, file_path: String, style_sheets: &Vec<StyleSheet>) -> HTMLPage {
+    pub fn parse_root(&mut self, node: Node, font: Attrs, file_path: String, style_sheets: &Vec<StyleSheet>, document: &Document) -> HTMLPage {
         self.curr_x = 0.;
         self.curr_y = 0.;
         self.base_path = file_path;
-        let parse_state = ParseState { 
-            x: 0., 
-            width: 600., 
-            font_weight: 400, 
-            text_align: TextAlign::Left, 
-            root_font_size: font.font_size, 
-            text_style: floem_renderer::text::Style::Normal,
-            prefix: "",
-            list_context: ListContext { 
-                list_type: ListType::None, 
-                item_number: 0, 
-                depth: 0, 
-                indent_width: 0.0 
-            }
-        };
+
 
         for child in node.children() {
             if child.tag_name().name().eq("body") {
-                let block = self.parse(child, font, style_sheets, parse_state, vec![0]);
+                let parse_state = ParseState {
+                    x: 0.,
+                    width: 600.,
+                    font_weight: 400,
+                    text_align: TextAlign::Left,
+                    root_font_size: font.font_size,
+                    text_style: floem_renderer::text::Style::Normal,
+                    prefix: "",
+                    list_context: ListContext {
+                        list_type: ListType::None,
+                        item_number: 0,
+                        depth: 0,
+                        indent_width: 0.0
+                    },
+                    ancestors: Vec::new(),
+                };
+                let block = self.parse(child, font, style_sheets, parse_state, vec![0], document);
                 let block_type = BlockElem { children: vec![block], total_child_count: 1 };
                 let root = Elem { size: Size::default(), point: Point::default(), elem_type: ElemType::Block(block_type) };
                 return HTMLPage { root, locations: self.locations.clone() }
@@ -218,18 +221,20 @@ impl BookElemFactory {
         return HTMLPage { root, locations: FxHashMap::default() }
     }
 
-    pub fn parse(&mut self, node: Node, mut font: Attrs, style_sheets: &Vec<StyleSheet>, mut parse_state: ParseState, mut index: Vec<usize>) -> Elem {
-        let mut block_elem = BlockElem { children: Vec::new(), total_child_count: 0 };
-        let mut inline_items: Vec<InlineItem> = Vec::new();
-        let init_point = Point::new(self.curr_x, self.curr_y);
+    pub fn parse(&mut self, node: Node, mut font: Attrs, style_sheets: &Vec<StyleSheet>, mut parse_state: ParseState, mut index: Vec<usize>, document: &Document) -> Elem {
+        let mut block_elem      = BlockElem { children: Vec::new(), total_child_count: 0 };
+        let mut inline_items    = Vec::new();
+        let     init_point      = Point::new(self.curr_x, self.curr_y);
         let now = Instant::now();
 
-        let (margins, mut parse_state) = resolve_style(style_sheets, &node, &mut font, parse_state);
+        let (margins, mut parse_state) = resolve_style(style_sheets, &node, &mut font, parse_state, document);
+        parse_state.ancestors.push(node.id());
+
         self.style_time += (Instant::now() - now).as_nanos();
-        parse_state.width -= margins.left + margins.right;
-        parse_state.x += margins.left / 2.;
-        self.curr_x = parse_state.x;
-        self.curr_y += margins.top;
+        parse_state.width   -= margins.left + margins.right;
+        parse_state.x       += margins.left / 2.;
+        self.curr_x         = parse_state.x;
+        self.curr_y         += margins.top;
         index.push(0);
         if let Some(id) = node.attribute("id") {
             self.locations.insert(id.to_string(), index.clone());
@@ -239,87 +244,96 @@ impl BookElemFactory {
             let tag_name = child.tag_name().name();
 
             if BLOCK_ELEMENTS.contains(&tag_name) {
-                self.flush_inline_items(&mut block_elem, font, &mut inline_items, parse_state, &mut index);
+                self.flush_inline_items(&mut block_elem, font, &mut inline_items, &parse_state, &mut index);
 
                 block_elem.add_child(match tag_name {
-                    "ul" | "ol" => self.parse_list(child, font, style_sheets, parse_state, index.clone()),
+                    "ul" | "ol" => self.parse_list(child, font, style_sheets, parse_state.clone(), index.clone(), document),
                     "li" => {
-                        parse_state.prefix = "-\t";
-                        self.parse(child, font, style_sheets, parse_state, index.clone())
+                        let mut li_state = parse_state.clone();
+                        li_state.prefix = "-\t";
+                        self.parse(child, font, style_sheets, li_state, index.clone(), document)
                         //self.parse_list_item(child, font, style_sheets, parse_state, index.clone())
                     },
-                    "pre"   => self.parse_pre(child, font, style_sheets, parse_state, index.clone()),
-                    "table" => self.parse_table(child, font, style_sheets, parse_state, index.clone()),
-                    _       => self.parse(child, font, style_sheets, parse_state, index.clone())
+                    "pre"   => self.parse_pre(child, font, style_sheets, parse_state.clone(), index.clone(), document),
+                    "table" => self.parse_table(child, font, style_sheets, parse_state.clone(), index.clone(), document),
+                    _       => self.parse(child, font, style_sheets, parse_state.clone(), index.clone(), document)
                 });
                 *index.last_mut().unwrap() += 1;
             }
             else {
-                self.process_inline_element(child, style_sheets, font, parse_state, &index, &mut inline_items);
+                self.process_inline_element(&mut block_elem, child, style_sheets, font, &parse_state, &mut index, &mut inline_items, document);
             }
         }
-        self.flush_inline_items(&mut block_elem, font, &mut inline_items, parse_state, &mut index);
+        self.flush_inline_items(&mut block_elem, font, &mut inline_items, &parse_state, &mut index);
         self.curr_y += margins.bottom;
 
         let block_height = block_elem.children.iter().fold(0., |acc, elem| acc + elem.size.height);
         Elem { size: Size::new(600., block_height + margins.top + margins.bottom), point: init_point, elem_type: ElemType::Block(block_elem) }
     }
 
-    fn flush_inline_items(&mut self, block_elem: &mut BlockElem, font: Attrs, inline_items: &mut Vec<InlineItem>, parse_state: ParseState, index: &mut Vec<usize>) {
+    fn flush_inline_items(&mut self, block_elem: &mut BlockElem, font: Attrs, inline_items: &mut Vec<InlineItem>, parse_state: &ParseState, index: &mut Vec<usize>) {
         if !inline_items.is_empty() {
             if parse_state.prefix != "" {
-                inline_items.insert(0, self.parse_text(parse_state.prefix, font, parse_state, None).first().unwrap().clone())
+                inline_items.insert(0, self.parse_text(parse_state.prefix, font, parse_state.clone(), None).first().unwrap().clone())
             }
             block_elem.add_child(layout_elem_lines(self, std::mem::take(inline_items), parse_state));
             *index.last_mut().unwrap() += 1;
         }
     }
 
-    fn process_inline_element(&mut self, child: Node, style_sheets: &Vec<StyleSheet>, font: Attrs, parse_state: ParseState, index: &Vec<usize>, inline_items: &mut
-    Vec<InlineItem>) {
+    fn process_inline_element(&mut self, block_elem: &mut BlockElem, child: Node, style_sheets: &Vec<StyleSheet>, font: Attrs, parse_state: &ParseState, index: &mut Vec<usize>, inline_items: &mut Vec<InlineItem>, document: &Document) {
         let tag_name = child.tag_name().name();
         match tag_name {
-            "" => inline_items.extend(self.parse_text(child.text().unwrap_or_default(), font, parse_state, None)),
-            "img" => inline_items.push(self.parse_img(child, style_sheets, font, index, parse_state)),
-            "br" => { /* Handle in flush_inline_items */ },
+            "" => inline_items.extend(self.parse_text(child.text().unwrap_or_default(), font, parse_state.clone(), None)),
+            "img" => inline_items.push(self.parse_img(child, style_sheets, font, index, parse_state.clone(), document)),
+            "br" => { self.flush_inline_items(block_elem, font, inline_items, parse_state, index)},
             "a" => {
                 let href = child.attribute("href");
-                inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state, href, index).0);
+                inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state.clone(), href, index, document).0);
             },
-            _ => inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state, None, index).0),
+            _ => inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state.clone(), None, index, document).0),
         }
     }
 
-    pub fn parse_inline(&mut self, node: Node, style_sheets: &Vec<StyleSheet>, mut font: Attrs, mut parse_state: ParseState, href: Option<&str>, index: &Vec<usize>) -> (Vec<InlineItem>, TextAlign) {
+    pub fn parse_inline(&mut self, node: Node, style_sheets: &Vec<StyleSheet>, mut font: Attrs, mut parse_state: ParseState, href: Option<&str>, index: &Vec<usize>, document: &Document) -> (Vec<InlineItem>, TextAlign) {
         let mut inline_items: Vec<InlineItem> = Vec::new();
         let now = Instant::now();
-        let (_, mut parse_state) = resolve_style(style_sheets, &node, &mut font, parse_state);
+        let (_, mut parse_state) = resolve_style(style_sheets, &node, &mut font, parse_state, document);
+        parse_state.ancestors.push(node.id());
+
         self.style_time += (Instant::now() - now).as_nanos();
+        let mut final_text_align = parse_state.text_align;
         if let Some(id) = node.attribute("id") {
             self.locations.insert(id.to_string(), index.clone());
         }
         for child in node.children() {
             if child.tag_name().name().eq("") { 
-                inline_items.extend(self.parse_text(child.text().unwrap_or_default(), font, parse_state, href)); 
+                inline_items.extend(self.parse_text(child.text().unwrap_or_default(), font, parse_state.clone(), href)); 
             } 
-            else if child.has_tag_name("a") {
+            else if child.has_tag_name("a")  {
                 if let Some(href) = child.attribute("href") { 
-                    inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state, Some(href), index).0) 
+                    inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state.clone(), Some(href), index, document).0) 
+                }
+                else {
+                    let (inline, text_align) = self.parse_inline(child, style_sheets, font, parse_state.clone(), href, index, document);
+                    final_text_align = text_align;
+                    inline_items.extend(inline);
                 }
             } else { 
-                let (inline, text_align) = self.parse_inline(child, style_sheets, font, parse_state, href, index);
-                parse_state.text_align = text_align;
+                let (inline, text_align) = self.parse_inline(child, style_sheets, font, parse_state.clone(), href, index, document);
+                final_text_align = text_align;
                 inline_items.extend(inline); 
             }
         }
-        (inline_items, parse_state.text_align)
+        (inline_items, final_text_align)
     }
 
-    pub fn parse_img(&mut self, node: Node, style_sheets: &Vec<StyleSheet>, mut font: Attrs, index: &Vec<usize>, parse_state: ParseState) -> InlineItem {
+    pub fn parse_img(&mut self, node: Node, style_sheets: &Vec<StyleSheet>, mut font: Attrs, index: &Vec<usize>, mut parse_state: ParseState, document: &Document) -> InlineItem {
         if let Some(id) = node.attribute("id") {
             self.locations.insert(id.to_string(), index.clone());
         }
-        let (_, mut parse_state) = resolve_style(style_sheets, &node, &mut font, parse_state);
+        parse_state.ancestors.push(node.id());
+        let (_, mut parse_state) = resolve_style(style_sheets, &node, &mut font, parse_state, document);
         let relative_path   = node.attribute("src").unwrap();
         let image_path      = resolve_path(&self.base_path, relative_path);
         let image           = self.images.get(&image_path).unwrap();
@@ -492,7 +506,7 @@ impl BookElemFactory {
         inline_items
     }
 
-    fn parse_list(&mut self, node: Node, font: Attrs, style_sheets: &Vec<StyleSheet>, mut parse_state: ParseState, mut index: Vec<usize>) -> Elem {
+    fn parse_list(&mut self, node: Node, font: Attrs, style_sheets: &Vec<StyleSheet>, mut parse_state: ParseState, mut index: Vec<usize>, document: &Document) -> Elem {
         let list_type = match node.tag_name().name() {
             "ul" => ListType::Unordered(BulletStyle::Disc),
             "ol" => ListType::Ordered(NumberStyle::Decimal),
@@ -510,7 +524,7 @@ impl BookElemFactory {
         parse_state.width -= list_context.indent_width;
         parse_state.x += list_context.indent_width;
         self.curr_x = parse_state.x;
-        self.parse(node, font, style_sheets, parse_state, index)
+        self.parse(node, font, style_sheets, parse_state, index, document)
             /*
 
 
@@ -526,13 +540,13 @@ impl BookElemFactory {
 */
     }
     
-    fn parse_list_item(&mut self, node: Node, font: Attrs, style_sheets: &Vec<StyleSheet>, mut parse_state: ParseState, index: Vec<usize>) -> Elem {
+    fn parse_list_item(&mut self, node: Node, font: Attrs, style_sheets: &Vec<StyleSheet>, mut parse_state: ParseState, index: Vec<usize>, document: &Document) -> Elem {
         let mut list_context = parse_state.list_context;
 
-        let marker = self.generate_list_marker(list_context, font, parse_state);
+        let marker = self.generate_list_marker(list_context, font, parse_state.clone());
         
         let mut block_elem = BlockElem { children: Vec::new(), total_child_count: 0 };
-        let marker_elem = layout_elem_lines(self, vec![marker.clone()], parse_state);
+        let marker_elem = layout_elem_lines(self, vec![marker.clone()], &parse_state);
         block_elem.add_child(marker_elem);
         
         //parse_state.width -= marker.size.width;
@@ -540,7 +554,7 @@ impl BookElemFactory {
         //self.curr_x += marker.size.width;
         self.curr_y -= marker.size.height;
 
-        let mut content = self.parse(node, font, style_sheets, parse_state, index);
+        let mut content = self.parse(node, font, style_sheets, parse_state.clone(), index, document);
 
         block_elem.add_child(content);
 
@@ -650,7 +664,7 @@ mod tests {
                 .color(Color::rgb8(43, 43, 43))
                 ;
             let mut book_factory = BookElemFactory::new(cache, HashMap::new(), &base_font);
-            let root = book_factory.parse_root(document.root(), base_font, "/".to_string(), &Vec::new());
+            //let root = book_factory.parse_root(document.root(), base_font, "/".to_string(), &Vec::new());
         }
 
     }

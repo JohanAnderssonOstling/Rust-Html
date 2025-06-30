@@ -85,7 +85,9 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
     let now = Instant::now();
     let mut book_factory = BookElemFactory::new(cache, image_map, &base_font);
     let elems: Vec<HTMLPage> = documents.iter().zip(&sections)
-        .map(|document| book_factory.parse_root(document.0.root_element(), base_font, document.1.clone(), &style_sheets))
+        .map(|document| {
+            book_factory.parse_root(document.0.root_element(), base_font, document.1.clone(), &style_sheets, document.0)
+        })
         .collect();
     let mut pages: HashMap<String, HTMLPage> = HashMap::with_capacity(elems.len());
     let mut link_index: HashMap<String, FxHashMap<String, Vec<usize>>> = HashMap::with_capacity(elems.len());

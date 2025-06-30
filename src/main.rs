@@ -20,6 +20,8 @@ mod toc;
 mod table_parser;
 mod pre_parser;
 mod renderer;
+mod arena;
+mod book_elem_arena;
 
 fn app_view() -> impl View {
     /*let mut epub_renderer = EpubReader::new("/home/johan/Hem/Downloads/A Concise History of Switzerland.epub");

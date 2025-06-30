@@ -2,7 +2,7 @@ use floem::kurbo::{Point, Size};
 use floem_renderer::text::Attrs;
 use lightningcss::properties::text::TextAlign;
 use lightningcss::stylesheet::StyleSheet;
-use roxmltree::Node;
+use roxmltree::{Document, Node};
 use crate::book_elem::{BookElemFactory, CharGlyph, Elem, ElemLine, ElemLines, ElemType, InlineContent, InlineElem, ParseState};
 use crate::layout::layout_elem_lines;
 const CELL_PAD_X: f64 = 10.0;   // px on the left *and* right
@@ -16,7 +16,7 @@ impl BookElemFactory {
         style_sheets: &Vec<StyleSheet>,
         mut parse_state: ParseState,
         mut index: Vec<usize>,
-
+        document: &Document,
     ) -> Elem {
         use crate::book_elem::InlineItem;
 
@@ -49,7 +49,7 @@ impl BookElemFactory {
         for row_node in node.children().filter(|n| n.has_tag_name("tr")) {
             let mut parsed_row_cells: Vec<ParsedTableCell> = Vec::new();
             for (idx, cell_node) in row_node.children().filter(|n| n.has_tag_name("td") || n.has_tag_name("th")).enumerate() {
-                let (inline_items, text_align) = self.parse_inline(cell_node, style_sheets, font, parse_state, None, &index);
+                let (inline_items, text_align) = self.parse_inline(cell_node, style_sheets, font, parse_state.clone(), None, &index, document);
                 let mut min_width: f64 = 0.;
                 let mut max_width = 0.;
                 for inline_item in inline_items.iter() {
@@ -76,7 +76,7 @@ impl BookElemFactory {
             for cell in row {
                 parse_state.width = *col_widths.get(col_idx).unwrap();
                 parse_state.text_align = cell.text_align;
-                let elem = layout_elem_lines(self, cell.inline_items, parse_state);
+                let elem = layout_elem_lines(self, cell.inline_items, &parse_state);
                 self.curr_y -= elem.size.height;
                 match elem.elem_type {
                     ElemType::Lines(lines) => {
