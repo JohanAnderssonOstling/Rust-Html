@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -87,21 +88,36 @@ impl Elem {
     
 }
 pub fn get_size(elem: &Elem, usage: &mut MemUsage) {
+    usage.elem_size += std::mem::size_of::<Elem>();
     match &elem.elem_type {
         ElemType::Block(block) => {
+            usage.elem_size += std::mem::size_of::<BlockElem>();
             for child in &block.children {
-                usage.elem_size += std::mem::size_of::<Elem>();
                 get_size(child, usage);
             }
         }
         ElemType::Lines(lines) => {
+            usage.elem_size += std::mem::size_of::<ElemLines>();
             for line in &lines.elem_lines {
                 usage.line_size += std::mem::size_of::<ElemLine>();
                 for inline in &line.inline_elems {
                     usage.inline_size += std::mem::size_of::<InlineElem>();
+                    usage.inline_size += std::mem::size_of::<InlineContent>();
                     match &inline.inline_content { 
                         InlineContent::Text(glyphs) => {
                             usage.char_size += size_of_vec(glyphs)
+                        }
+                        InlineContent::Image(image) => {
+                            if let Ok(guard) = image.image_promise.read() {
+                                if let Some((image, buffer)) = &*guard {
+                                    // Assuming Image is a custom struct:
+                                    usage.inline_size += std::mem::size_of_val(image);
+
+                                    // Size of image bytes
+                                    println!("Getting image size");
+                                    usage.img_size += (image.data.data().len());
+                                }
+                            }
                         }
                         _ => ()
                     }
@@ -115,6 +131,7 @@ pub struct MemUsage {
     pub line_size: usize,
     pub inline_size: usize, 
     pub char_size: usize,
+    pub img_size: usize,
 }
 pub fn size_of_vec<T>(vec: &Vec<T>) -> usize {
     std::mem::size_of::<Vec<T>>() + vec.capacity() * std::mem::size_of::<T>()
@@ -309,7 +326,10 @@ impl BookElemFactory {
         for child in node.children() {
             if child.tag_name().name().eq("") { 
                 inline_items.extend(self.parse_text(child.text().unwrap_or_default(), font, parse_state.clone(), href)); 
-            } 
+            }
+                else if child.tag_name().name().eq("img") {
+                    inline_items.push(self.parse_img(child, style_sheets, font, index, parse_state.clone(), document))
+                }
             else if child.has_tag_name("a")  {
                 if let Some(href) = child.attribute("href") { 
                     inline_items.extend(self.parse_inline(child, style_sheets, font, parse_state.clone(), Some(href), index, document).0) 

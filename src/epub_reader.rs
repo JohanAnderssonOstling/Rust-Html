@@ -106,7 +106,7 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
     let cache_size = book_factory.cache.total_memory_usage();
     println!("Cache size: {cache_size}");
     let mut size = 0;
-    let mut mem_usage = MemUsage {char_size: 0, inline_size: 0, line_size: 0, elem_size: 0};
+    let mut mem_usage = MemUsage {char_size: 0, inline_size: 0, line_size: 0, elem_size: 0, img_size: 0};
     for page in pages.values() {
         get_size(&page.root, &mut mem_usage)
     }
@@ -114,10 +114,11 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
     println!("Inline content: {}", std::mem::size_of::<InlineContent>());
     println!("Char size: {}", std::mem::size_of::<CharGlyph>());
     println!("String size: {}", std::mem::size_of::<String>());
-    println!("Elem Size: {}", mem_usage.elem_size / 1_000_000);
-    println!("Line Size: {}", mem_usage.line_size / 1_000_000);
-    println!("Size: {}", mem_usage.char_size / 1_000_000);
-    println!("Inline Size: {}", mem_usage.inline_size / 1_000_000);
+    println!("Elem Size: {}", mem_usage.elem_size / 1_000);
+    println!("Line Size: {}", mem_usage.line_size / 1_000);
+    println!("Size: {}", mem_usage.char_size / 1_000);
+    println!("Inline Size: {}", mem_usage.inline_size / 1_000);
+    println!("Image Size: {}", mem_usage.img_size / 1_000);
     let mut html_renderer = HtmlRenderer::new(start_index_signal, book_factory.cache, pages, current_url, set_at_end, get_go_on);
     html_renderer = html_renderer.style(|style| style.flex_grow(1.0).margin(40).width_full());
 
