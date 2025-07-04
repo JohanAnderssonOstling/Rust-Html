@@ -114,7 +114,6 @@ pub fn get_size(elem: &Elem, usage: &mut MemUsage) {
                                     usage.inline_size += std::mem::size_of_val(image);
 
                                     // Size of image bytes
-                                    println!("Getting image size");
                                     usage.img_size += (image.data.data().len());
                                 }
                             }

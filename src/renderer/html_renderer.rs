@@ -500,6 +500,7 @@ impl View for HtmlRenderer {
         let scaling_offset_y    = self.point.y / self.scale - self.point.y;
         cx.set_scale(self.scale);
         cx.offset((scaling_offset_x, scaling_offset_y));
+
         if self.render_forward {
                 let first_elem      = root_elem.get_elem(&start_index, 0);
                 self.start_offset_y = first_elem.get_y(self.start_elem_index.get_untracked());

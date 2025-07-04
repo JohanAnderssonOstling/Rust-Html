@@ -33,7 +33,6 @@ impl BookElemFactory {
             text_align: TextAlign
         }
         
-        println!("Table");
 
         let mut parsed_table_rows: Vec<Vec<ParsedTableCell>> = Vec::new();
 

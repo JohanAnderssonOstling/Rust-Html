@@ -120,7 +120,7 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
     println!("Inline Size: {}", mem_usage.inline_size / 1_000);
     println!("Image Size: {}", mem_usage.img_size / 1_000);
     let mut html_renderer = HtmlRenderer::new(start_index_signal, book_factory.cache, pages, current_url, set_at_end, get_go_on);
-    html_renderer = html_renderer.style(|style| style.flex_grow(1.0).margin(40).width_full());
+    html_renderer = html_renderer.style(|style| style.flex_grow(1.0).margin(40).width_full().background(Color::WHITE));
 
 
     let toc_on_click = Rc::new(move |link: String| {
@@ -158,7 +158,7 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
     let toc_view = dyn_view(move ||
         if show_sidebar.get() {
             container(v_stack((crate::toc::toc_view(toc.clone(), toc_on_click.clone(), 0),)).scroll()
-                .style(|s| s.border_right(1).width(340)))
+                .style(|s| s.border_right(1).width(340).background(Color::WHITE)))
         }
         else {
             container(empty())
@@ -167,9 +167,9 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
     let main_area = h_stack((
         toc_view,
         html_renderer
-    )).style(move |s| s.flex_grow(1.0).min_height(0));
+    )).style(move |s| s.flex_grow(1.0).min_height(0).background(Color::WHITE));
 
-    let stack= v_stack((top_panel, main_area,)).style(move |s| s.flex_grow(1.0).height_full().flex_col());
+    let stack= v_stack((top_panel, main_area,)).style(move |s| s.flex_grow(1.0).height_full().flex_col().background(Color::WHITE));
     let lib_path = library_path.to_string();
     let id = id.to_string();
     let cloned_sections = sections.clone();
