@@ -364,60 +364,60 @@ impl BookElemFactory {
 
 
     pub fn parse_text(&mut self, text: &str, font: Attrs, parse_state: ParseState, href: Option<&str>) -> Vec<InlineItem> {
+        if text.is_empty() || text == "\n" { return Vec::new(); }
+        
         let mut inline_items: Vec<InlineItem> = Vec::new();
-        //if node.text().is_none() { return Vec::new(); }
-        if text.eq("") {return Vec::new()}
-        if text.eq("\n") { return Vec::new(); }
-
-        // Instead of split_whitespace, we manually segment the text.
-        // Each segment is a tuple where the first element is the segment string
-        // and the second element is a boolean indicating if it's composed of whitespace.
-        let mut segments: Vec<String> = Vec::new();
-        let mut current_segment = String::new();
+        let mut segments: Vec<(usize, usize)> = Vec::new();
+        let mut segment_start = 0;
         let mut current_is_space: Option<bool> = None;
         let mut only_whitespace = true;
-        for ch in text.chars() {
+        
+        for (i, ch) in text.char_indices() {
             let is_space = ch.is_whitespace();
-            if !is_space {only_whitespace = false}
+            if !is_space { only_whitespace = false; }
+            
             match current_is_space {
                 Some(flag) if flag == is_space => {
-                    current_segment.push(ch);
+                    // Continue current segment
                 }
-                Some(flag) => {
-                    segments.push((current_segment.clone()));
-                    current_segment.clear();
-                    current_segment.push(ch);
+                Some(_) => {
+                    // End current segment and start new one
+                    segments.push((segment_start, i));
+                    segment_start = i;
                     current_is_space = Some(is_space);
                 }
                 None => {
                     current_is_space = Some(is_space);
-                    current_segment.push(ch);
                 }
             }
         }
-        if only_whitespace {return Vec::new()}
-        if !current_segment.is_empty() {
-            segments.push((current_segment));
+        
+        if only_whitespace { return Vec::new(); }
+        if segment_start < text.len() {
+            segments.push((segment_start, text.len()));
         }
 
-        // Process each segment individually. Each segment, whether it's a word or a sequence of spaces,
-        // will be converted to an InlineItem with the exact glyph layout.
-        for segment in segments {
+        inline_items.reserve(segments.len());
+        
+        for (start, end) in segments {
+            let segment = &text[start..end];
             let mut char_x = 0.;
             let mut segment_height: f64 = 0.;
-            let mut char_glyphs = Vec::with_capacity(segment.len());
+            let mut char_glyphs = Vec::with_capacity(segment.chars().count());
+            
             for ch in segment.chars() {
                 let (text_layout, index) = self.cache.get_or_insert(ch, font, &parse_state);
-
                 char_glyphs.push(CharGlyph { char: index, x: char_x });
                 char_x += text_layout.size().width as f32;
                 segment_height = segment_height.max(text_layout.size().height);
             }
+            
             let size = Size::new(char_x as f64, segment_height as f64);
-            match href {
-                None => inline_items.push(InlineItem { size, inline_content: InlineContent::Text(char_glyphs) }),
-                Some(href) => inline_items.push(InlineItem { size, inline_content: InlineContent::Link((char_glyphs, href.to_string())) })
-            }
+            let inline_content = match href {
+                None => InlineContent::Text(char_glyphs),
+                Some(href) => InlineContent::Link((char_glyphs, href.to_string()))
+            };
+            inline_items.push(InlineItem { size, inline_content });
         }
 
         inline_items
