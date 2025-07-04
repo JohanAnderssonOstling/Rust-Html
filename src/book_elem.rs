@@ -4,6 +4,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::vec;
+use std::mem;
 
 use floem::kurbo::{Point, Size};
 use floem::peniko::Image;
@@ -174,6 +175,29 @@ pub enum BulletStyle { Disc, Circle, Square }
 
 #[derive(Clone, Copy)]  
 pub enum NumberStyle { Decimal, LowerAlpha, UpperAlpha, LowerRoman, UpperRoman }
+pub struct ObjectPool<T> {
+    items: Vec<T>,
+}
+
+impl<T: Default> ObjectPool<T> {
+    pub fn new() -> Self {
+        ObjectPool {
+            items: Vec::with_capacity(32),
+        }
+    }
+    
+    pub fn get(&mut self) -> T {
+        self.items.pop().unwrap_or_default()
+    }
+    
+    pub fn put(&mut self, mut item: T) {
+        if self.items.len() < 32 {
+            item = T::default();
+            self.items.push(item);
+        }
+    }
+}
+
 pub struct BookElemFactory  { 
     pub curr_x: f64, 
     pub curr_y: f64,
@@ -184,6 +208,7 @@ pub struct BookElemFactory  {
     pub root_font_size: f32,
     pub style_time: u128,
     pub style_cache: StyleCache,
+    pub inline_pool: ObjectPool<Vec<InlineItem>>,
 }
 #[derive(Clone)]
 pub struct ParseState {
@@ -200,7 +225,18 @@ pub struct ParseState {
 
 impl BookElemFactory {
     pub fn new(cache: GlyphCache, images: HashMap<String, ImageElem>, font: &Attrs) -> Self {
-        BookElemFactory { curr_x: 0., curr_y: 0., cache, images, base_path: String::new(), locations: FxHashMap::default(), root_font_size: font.font_size, style_time: 0, style_cache: StyleCache::new() }
+        BookElemFactory { 
+            curr_x: 0., 
+            curr_y: 0., 
+            cache, 
+            images, 
+            base_path: String::new(), 
+            locations: FxHashMap::default(), 
+            root_font_size: font.font_size, 
+            style_time: 0, 
+            style_cache: StyleCache::new(),
+            inline_pool: ObjectPool::new(),
+        }
     }
 
     pub fn parse_root(&mut self, node: Node, font: Attrs, file_path: String, style_sheets: &Vec<StyleSheet>, document: &Document) -> HTMLPage {
@@ -240,7 +276,8 @@ impl BookElemFactory {
 
     pub fn parse(&mut self, node: Node, mut font: Attrs, style_sheets: &Vec<StyleSheet>, mut parse_state: ParseState, mut index: Vec<usize>, document: &Document) -> Elem {
         let mut block_elem      = BlockElem { children: Vec::new(), total_child_count: 0 };
-        let mut inline_items    = Vec::new();
+        let mut inline_items    = self.inline_pool.get();
+        inline_items.clear();
         let     init_point      = Point::new(self.curr_x, self.curr_y);
         let now = Instant::now();
 
@@ -282,6 +319,7 @@ impl BookElemFactory {
             }
         }
         self.flush_inline_items(&mut block_elem, font, &mut inline_items, &parse_state, &mut index);
+        self.inline_pool.put(inline_items);
         self.curr_y += margins.bottom;
 
         let block_height = block_elem.children.iter().fold(0., |acc, elem| acc + elem.size.height);
