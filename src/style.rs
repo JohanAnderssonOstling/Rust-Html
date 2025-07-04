@@ -10,20 +10,57 @@ use roxmltree::{Document, Node};
 use std::collections::HashMap;
 use std::fmt::Pointer;
 use std::ops::Deref;
+use std::hash::{Hash, Hasher};
+use rustc_data_structures::fx::FxHashMap;
 use crate::book_elem::ParseState;
 
 pub struct Margins {
     pub top: f64, pub right: f64, pub bottom: f64, pub left: f64,
 }
+#[derive(Clone)]
 pub enum CSSValue {
     Length(LengthPercentageOrAuto),
     FontWeight(FontWeight),
     TextAlign(TextAlign),
     TextStyle(floem_renderer::text::Style),
 }
+
+#[derive(Clone)]
 pub struct Style {
     pub font_size: Option<FontSize>,
     pub properties: HashMap<String, CSSValue>
+}
+
+#[derive(Clone, Hash, PartialEq, Eq)]
+pub struct StyleCacheKey {
+    pub tag_name: String,
+    pub id: Option<String>,
+    pub class: Option<String>,
+    pub ancestor_tags: Vec<String>,
+}
+
+pub struct StyleCache {
+    cache: FxHashMap<StyleCacheKey, Style>,
+}
+
+impl StyleCache {
+    pub fn new() -> Self {
+        StyleCache {
+            cache: FxHashMap::default(),
+        }
+    }
+    
+    pub fn get(&self, key: &StyleCacheKey) -> Option<&Style> {
+        self.cache.get(key)
+    }
+    
+    pub fn insert(&mut self, key: StyleCacheKey, style: Style) {
+        self.cache.insert(key, style);
+    }
+    
+    pub fn clear(&mut self) {
+        self.cache.clear();
+    }
 }
 fn create_px(value: f32) -> CSSValue {
     CSSValue::Length(LengthPercentageOrAuto::LengthPercentage(LengthPercentage::Dimension(LengthValue::Px(value))))
@@ -91,6 +128,13 @@ impl Style {
     pub fn insert(&mut self,key: &str, value: CSSValue) {
         self.properties.insert(key.to_string(), value);
     }
+    
+    pub fn with_capacity(capacity: usize) -> Self {
+        Style {
+            font_size: None,
+            properties: HashMap::with_capacity(capacity),
+        }
+    }
 }
 
 struct MatchedRule<'a,'b> {
@@ -99,7 +143,7 @@ struct MatchedRule<'a,'b> {
     declarations: &'a [Property<'b>]
 }
 pub fn apply_style_sheet(style_sheet: & StyleSheet, node: &Node, style: &mut Style, parse_state: &ParseState, document: &Document) {
-    let mut matched_rules: Vec<MatchedRule> = Vec::new();
+    let mut matched_rules: Vec<MatchedRule> = Vec::with_capacity(16);
 
     for (index, rule) in style_sheet.rules.0.iter().enumerate() {
         match rule {
@@ -163,6 +207,64 @@ pub fn apply_style_sheet(style_sheet: & StyleSheet, node: &Node, style: &mut Sty
             }
         }
     }
+}
+
+pub fn resolve_style_cached(style_sheets: &Vec<StyleSheet>, node: &Node, font: &mut Attrs, mut parse_state: ParseState, document: &Document, cache: &mut StyleCache) -> (Margins, ParseState) {
+    let cache_key = StyleCacheKey {
+        tag_name: node.tag_name().name().to_string(),
+        id: node.attribute("id").map(|s| s.to_string()),
+        class: node.attribute("class").map(|s| s.to_string()),
+        ancestor_tags: parse_state.ancestors.iter()
+            .filter_map(|id| document.get_node(*id))
+            .map(|n| n.tag_name().name().to_string())
+            .collect(),
+    };
+    
+    if let Some(cached_style) = cache.get(&cache_key) {
+        return apply_cached_style(cached_style, font, parse_state);
+    }
+    
+    let mut style = Style::new(node.tag_name().name());
+    let mut margins = Margins {top: 0., right: 0., bottom: 0., left: 0.};
+    
+    for style_sheet in style_sheets {
+        apply_style_sheet(style_sheet, &node, &mut style, &parse_state, document);
+    }
+    
+    cache.insert(cache_key, style.clone());
+    apply_cached_style(&style, font, parse_state)
+}
+
+fn apply_cached_style(style: &Style, font: &mut Attrs, mut parse_state: ParseState) -> (Margins, ParseState) {
+    let mut margins = Margins {top: 0., right: 0., bottom: 0., left: 0.};
+    
+    if let Some(font_size) = &style.font_size {
+        let resolved_font_size = resolve_font_size(font_size, &parse_state, (font.font_size as f64)).round();
+        if resolved_font_size != 0. { *font = font.font_size(resolved_font_size as f32); }
+    }
+    
+    let font_size = font.font_size as f64;
+    for (key, value) in style.properties.iter() {
+        match value {
+            CSSValue::Length(value) => {
+                match key.as_str() {
+                    "margin-top"        => margins.top      += resolve_length(value, &parse_state, font_size),
+                    "margin-right"      => margins.right    += resolve_length(value, &parse_state, font_size),
+                    "margin-bottom"     => margins.bottom   += resolve_length(value, &parse_state, font_size),
+                    "margin-left"       => margins.left     += resolve_length(value, &parse_state, font_size),
+                    "padding-top"       => margins.top      += resolve_length(value, &parse_state, font_size),
+                    "padding-right"     => margins.right    += resolve_length(value, &parse_state, font_size),
+                    "padding-bottom"    => margins.bottom   += resolve_length(value, &parse_state, font_size),
+                    "padding-left"      => margins.left     += resolve_length(value, &parse_state, font_size),
+                    _ => ()
+                }
+            }
+            CSSValue::FontWeight(value) => {parse_state.font_weight = resolve_font_weight(value);}
+            CSSValue::TextAlign(value)  => parse_state.text_align = value.clone(),
+            CSSValue::TextStyle(text_style)    => parse_state.text_style = *text_style,
+        }
+    }
+    (margins, parse_state)
 }
 
 pub fn resolve_style(style_sheets: &Vec<StyleSheet>, node: &Node, font: &mut Attrs, mut parse_state: ParseState, document: &Document) -> (Margins, ParseState){

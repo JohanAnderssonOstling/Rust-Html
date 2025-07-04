@@ -17,7 +17,7 @@ use sha2::Digest;
 
 use crate::glyph_interner::GlyphCache;
 use crate::layout::layout_elem_lines;
-use crate::style::resolve_style;
+use crate::style::{resolve_style, resolve_style_cached, StyleCache};
 
 static BLOCK_ELEMENTS: [&str; 37] = [
     "html", "body", "article", "section", "nav", "aside",
@@ -183,6 +183,7 @@ pub struct BookElemFactory  {
     pub locations: FxHashMap<String, Vec<usize>>,
     pub root_font_size: f32,
     pub style_time: u128,
+    pub style_cache: StyleCache,
 }
 #[derive(Clone)]
 pub struct ParseState {
@@ -199,7 +200,7 @@ pub struct ParseState {
 
 impl BookElemFactory {
     pub fn new(cache: GlyphCache, images: HashMap<String, ImageElem>, font: &Attrs) -> Self {
-        BookElemFactory { curr_x: 0., curr_y: 0., cache, images, base_path: String::new(), locations: FxHashMap::default(), root_font_size: font.font_size, style_time: 0 }
+        BookElemFactory { curr_x: 0., curr_y: 0., cache, images, base_path: String::new(), locations: FxHashMap::default(), root_font_size: font.font_size, style_time: 0, style_cache: StyleCache::new() }
     }
 
     pub fn parse_root(&mut self, node: Node, font: Attrs, file_path: String, style_sheets: &Vec<StyleSheet>, document: &Document) -> HTMLPage {
@@ -243,7 +244,7 @@ impl BookElemFactory {
         let     init_point      = Point::new(self.curr_x, self.curr_y);
         let now = Instant::now();
 
-        let (margins, mut parse_state) = resolve_style(style_sheets, &node, &mut font, parse_state, document);
+        let (margins, mut parse_state) = resolve_style_cached(style_sheets, &node, &mut font, parse_state, document, &mut self.style_cache);
         parse_state.ancestors.push(node.id());
 
         self.style_time += (Instant::now() - now).as_nanos();
@@ -314,7 +315,7 @@ impl BookElemFactory {
     pub fn parse_inline(&mut self, node: Node, style_sheets: &Vec<StyleSheet>, mut font: Attrs, mut parse_state: ParseState, href: Option<&str>, index: &Vec<usize>, document: &Document) -> (Vec<InlineItem>, TextAlign) {
         let mut inline_items: Vec<InlineItem> = Vec::new();
         let now = Instant::now();
-        let (_, mut parse_state) = resolve_style(style_sheets, &node, &mut font, parse_state, document);
+        let (_, mut parse_state) = resolve_style_cached(style_sheets, &node, &mut font, parse_state, document, &mut self.style_cache);
         parse_state.ancestors.push(node.id());
 
         self.style_time += (Instant::now() - now).as_nanos();
@@ -352,7 +353,7 @@ impl BookElemFactory {
             self.locations.insert(id.to_string(), index.clone());
         }
         parse_state.ancestors.push(node.id());
-        let (_, mut parse_state) = resolve_style(style_sheets, &node, &mut font, parse_state, document);
+        let (_, mut parse_state) = resolve_style_cached(style_sheets, &node, &mut font, parse_state, document, &mut self.style_cache);
         let relative_path   = node.attribute("src").unwrap();
         let image_path      = resolve_path(&self.base_path, relative_path);
         let image           = self.images.get(&image_path).unwrap();
