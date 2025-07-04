@@ -491,7 +491,6 @@ impl View for HtmlRenderer {
         self.size.height        /= self.scale;
         self.col_count          = (self.size.width / self.col_width).floor();
         self.col_gap            = (self.size.width - self.col_count * self.col_width) / (self.col_count + 1.);
-        //self.col_gap = 0.;
         let mut render_state    = RenderState {x: 0., y: 0., col_index: 0., terminate: false, line_index: 0, selected_text: String::new(), first_line_rendered: false, selection: self.get_selection()};
         let mut start_index     = self.start_index.get();
         let mut start_elem_index = self.start_elem_index.get_untracked();
@@ -535,7 +534,7 @@ impl View for HtmlRenderer {
         }
         cx.set_scale(1.0);
         self.click_location = None;
-        //println!("Render time: {}", now.elapsed().as_micros())
+        println!("Render time: {}", now.elapsed().as_micros())
 
     }
 
