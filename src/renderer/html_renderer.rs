@@ -534,7 +534,7 @@ impl View for HtmlRenderer {
         }
         cx.set_scale(1.0);
         self.click_location = None;
-        println!("Render time: {}", now.elapsed().as_micros())
+        //println!("Render time: {}", now.elapsed().as_micros())
 
     }
 

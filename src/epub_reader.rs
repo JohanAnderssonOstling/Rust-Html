@@ -36,7 +36,7 @@ use crate::toc::{hierarchical_toc_entry, toc_view, TocEntry};
 pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signals: Signals) -> impl View {
     let epub = Epub::new(path).unwrap();
     let id = epub.metadata().unique_identifier().unwrap().value();
-    let position = read_book_position(library_path, id);
+    let mut position = read_book_position(library_path, id);
     let start_index_signal = create_rw_signal(position.1);
 
     update_last_read(library_path, id);
@@ -100,7 +100,9 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
     println!("Style time: {}", book_factory.style_time / 1_000_000);
     let (get_at_end, set_at_end)        = create_signal(0);
     let (get_go_on, set_go_on)          = create_signal(false);
+    if position.0 == sections.len() {position.0 -= 1}
     let section_index                   = create_rw_signal(position.0);
+
     let (current_url)  = create_rw_signal(sections[position.0].clone());
 
     let cache_size = book_factory.cache.total_memory_usage();
@@ -126,7 +128,18 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
     let toc_on_click = Rc::new(move |link: String| {
         println!("Clicked toc link: {link}");
         let parts: Vec<&str> = link.split("#").collect();
-        current_url.set(parts[0].to_string());
+        let mut new_url = parts[0].to_string();
+        let current_url_var = current_url.get_untracked();
+        println!("Current url: {current_url_var}");
+        let mut paths: Vec<&str> = current_url_var.split("/").collect();
+        if paths.len() > 1 {
+            println!("Len: {}", paths.len());
+            paths.pop().unwrap();
+            let path = paths.join("/");
+            new_url = format!("{path}/{new_url}")
+        }
+        println!("Setting current url: {}", new_url);
+        current_url.set(new_url);
         if parts.len() == 1 {
             start_index_signal.set(Vec::new());
             return;
