@@ -13,12 +13,17 @@ use lightningcss::properties::text::TextAlign;
 use lightningcss::stylesheet::StyleSheet;
 use regex::Regex;
 use roxmltree::{Document, Node, NodeId};
+use scraper::{Html, ElementRef, Selector};
 use rustc_data_structures::fx::FxHashMap;
 use sha2::Digest;
 
 use crate::glyph_interner::GlyphCache;
 use crate::layout::layout_elem_lines;
-use crate::style::{resolve_style, resolve_style_cached, StyleCache};
+use crate::styling::style::{resolve_style, resolve_style_cached, resolve_style_scraper, StyleCache, Margins};
+
+// Note: The complex wrapper layer was removed for simplicity.
+// HTML parsing is handled directly via parse_root_html() and scraper functions.
+// XML parsing continues to use roxmltree via the existing parse_root() function.
 
 static BLOCK_ELEMENTS: [&str; 37] = [
     "html", "body", "article", "section", "nav", "aside",
@@ -237,6 +242,46 @@ impl BookElemFactory {
             style_cache: StyleCache::new(),
             inline_pool: ObjectPool::new(),
         }
+    }
+
+    // New HTML parsing function using scraper
+    pub fn parse_root_html(&mut self, html_content: &str, font: Attrs, file_path: String, style_sheets: &Vec<StyleSheet>) -> HTMLPage {
+        self.curr_x = 0.;
+        self.curr_y = 0.;
+        self.base_path = file_path;
+
+        let document = Html::parse_document(html_content);
+        
+        let body_selector = Selector::parse("body").unwrap();
+        
+        if let Some(body_element) = document.select(&body_selector).next() {
+            let parse_state = ParseState {
+                x: 0.,
+                width: 600.,
+                font_weight: 400,
+                text_align: TextAlign::Left,
+                root_font_size: font.font_size,
+                text_style: floem_renderer::text::Style::Normal,
+                prefix: "",
+                list_context: ListContext {
+                    list_type: ListType::None,
+                    item_number: 0,
+                    depth: 0,
+                    indent_width: 0.0
+                },
+                ancestors: Vec::new(),
+            };
+            
+            // For now, create a minimal block until we fully migrate
+            let block = self.parse_element_scraper(body_element, font, style_sheets, parse_state, vec![0]);
+            let block_type = BlockElem { children: vec![block], total_child_count: 1 };
+            let root = Elem { size: Size::default(), point: Point::default(), elem_type: ElemType::Block(block_type) };
+            return HTMLPage { root, locations: self.locations.clone() }
+        }
+        
+        let elem_lines = ElemLines { height: 0., elem_lines: Vec::new() };
+        let root = Elem { size: Size::default(), point: Point::default(), elem_type: ElemType::Lines(elem_lines) };
+        HTMLPage { root, locations: FxHashMap::default() }
     }
 
     pub fn parse_root(&mut self, node: Node, font: Attrs, file_path: String, style_sheets: &Vec<StyleSheet>, document: &Document) -> HTMLPage {
@@ -679,6 +724,151 @@ impl BookElemFactory {
             }
         }
         result
+    }
+
+    // Scraper-based element parsing
+    pub fn parse_element_scraper(&mut self, element: ElementRef, mut font: Attrs, style_sheets: &Vec<StyleSheet>, mut parse_state: ParseState, mut index: Vec<usize>) -> Elem {
+        let mut block_elem = BlockElem { children: Vec::new(), total_child_count: 0 };
+        let mut inline_items = self.inline_pool.get();
+        inline_items.clear();
+        let init_point = Point::new(self.curr_x, self.curr_y);
+        
+        // Use scraper-compatible style resolution
+        let now = Instant::now();
+        let (margins, mut parse_state) = resolve_style_scraper(style_sheets, &element, &mut font, parse_state);
+        
+        // Note: No need for manual ancestor tracking with direct DOM navigation
+        
+        self.style_time += (Instant::now() - now).as_nanos();
+        
+        parse_state.width -= margins.left + margins.right;
+        parse_state.x += margins.left / 2.;
+        self.curr_x = parse_state.x;
+        self.curr_y += margins.top;
+        index.push(0);
+        
+        if let Some(id) = element.value().attr("id") {
+            self.locations.insert(id.to_string(), index.clone());
+        }
+
+        // Process children with proper node type handling
+        for child in element.children() {
+            // Handle text nodes directly
+            if let Some(text) = child.value().as_text() {
+                inline_items.extend(self.parse_text(text, font, parse_state.clone(), None));
+                continue;
+            }
+            
+            // Handle element nodes
+            if child.value().is_element() {
+                // Convert NodeRef to ElementRef for element nodes
+                if let Some(element_ref) = ElementRef::wrap(child) {
+                    let tag_name = element_ref.value().name();
+
+                    if BLOCK_ELEMENTS.contains(&tag_name) {
+                        self.flush_inline_items(&mut block_elem, font, &mut inline_items, &parse_state, &mut index);
+                        
+                        block_elem.add_child(match tag_name {
+                            "ul" | "ol" => self.parse_list_scraper(element_ref, font, style_sheets, parse_state.clone(), index.clone()),
+                            "li" => {
+                                let mut li_state = parse_state.clone();
+                                li_state.prefix = "-\t";
+                                self.parse_element_scraper(element_ref, font, style_sheets, li_state, index.clone())
+                            },
+                            "pre" => self.parse_pre_scraper(element_ref, font, style_sheets, parse_state.clone(), index.clone()),
+                            "table" => self.parse_table_scraper(element_ref, font, style_sheets, parse_state.clone(), index.clone()),
+                            _ => self.parse_element_scraper(element_ref, font, style_sheets, parse_state.clone(), index.clone())
+                        });
+                        *index.last_mut().unwrap() += 1;
+                    }
+                    else {
+                        self.process_inline_element_scraper(&mut block_elem, element_ref, style_sheets, font, &parse_state, &mut index, &mut inline_items);
+                    }
+                }
+            }
+        }
+        
+        self.flush_inline_items(&mut block_elem, font, &mut inline_items, &parse_state, &mut index);
+        self.inline_pool.put(inline_items);
+        self.curr_y += margins.bottom;
+
+        let block_height = block_elem.children.iter().fold(0., |acc, elem| acc + elem.size.height);
+        Elem { size: Size::new(600., block_height + margins.top + margins.bottom), point: init_point, elem_type: ElemType::Block(block_elem) }
+    }
+
+    fn process_inline_element_scraper(&mut self, block_elem: &mut BlockElem, child: ElementRef, style_sheets: &Vec<StyleSheet>, font: Attrs, parse_state: &ParseState, index: &mut Vec<usize>, inline_items: &mut Vec<InlineItem>) {
+        let tag_name = child.value().name();
+        match tag_name {
+            "img" => inline_items.push(self.parse_img_scraper(child, style_sheets, font, index, parse_state.clone())),
+            "br" => { self.flush_inline_items(block_elem, font, inline_items, parse_state, index)},
+            "a" => {
+                let href = child.value().attr("href");
+                inline_items.extend(self.parse_inline_scraper(child, style_sheets, font, parse_state.clone(), href, index).0);
+            },
+            _ => inline_items.extend(self.parse_inline_scraper(child, style_sheets, font, parse_state.clone(), None, index).0),
+        }
+    }
+
+    // Placeholder implementations for scraper-based parsing methods
+    fn parse_list_scraper(&mut self, element: ElementRef, font: Attrs, style_sheets: &Vec<StyleSheet>, parse_state: ParseState, index: Vec<usize>) -> Elem {
+        // TODO: Implement scraper-based list parsing
+        self.parse_element_scraper(element, font, style_sheets, parse_state, index)
+    }
+
+
+    fn parse_img_scraper(&mut self, element: ElementRef, style_sheets: &Vec<StyleSheet>, font: Attrs, index: &Vec<usize>, parse_state: ParseState) -> InlineItem {
+        if let Some(id) = element.value().attr("id") {
+            self.locations.insert(id.to_string(), index.clone());
+        }
+        
+        let relative_path = element.value().attr("src").unwrap_or("");
+        let image_path = resolve_path(&self.base_path, relative_path);
+        
+        if let Some(image) = self.images.get(&image_path) {
+            let size = Size::new(image.width as f64, image.height as f64);
+            InlineItem { size, inline_content: InlineContent::Image(image.clone()) }
+        } else {
+            // Default empty image
+            InlineItem { 
+                size: Size::new(0.0, 0.0), 
+                inline_content: InlineContent::Text(Vec::new()) 
+            }
+        }
+    }
+
+    pub fn parse_inline_scraper(&mut self, element: ElementRef, style_sheets: &Vec<StyleSheet>, font: Attrs, parse_state: ParseState, href: Option<&str>, index: &Vec<usize>) -> (Vec<InlineItem>, TextAlign) {
+        let mut inline_items: Vec<InlineItem> = Vec::new();
+        let final_text_align = parse_state.text_align;
+        
+        if let Some(id) = element.value().attr("id") {
+            self.locations.insert(id.to_string(), index.clone());
+        }
+        
+        for child in element.children() {
+            if let Some(text) = child.value().as_text() {
+                inline_items.extend(self.parse_text(text, font, parse_state.clone(), href));
+            } else if child.value().is_element() {
+                if let Some(element_ref) = ElementRef::wrap(child) {
+                    let tag_name = element_ref.value().name();
+                    match tag_name {
+                        "img" => inline_items.push(self.parse_img_scraper(element_ref, style_sheets, font, index, parse_state.clone())),
+                        "a" => {
+                            if let Some(href) = element_ref.value().attr("href") {
+                                inline_items.extend(self.parse_inline_scraper(element_ref, style_sheets, font, parse_state.clone(), Some(href), index).0);
+                            } else {
+                                let (inline, _text_align) = self.parse_inline_scraper(element_ref, style_sheets, font, parse_state.clone(), href, index);
+                                inline_items.extend(inline);
+                            }
+                        },
+                        _ => {
+                            let (inline, _text_align) = self.parse_inline_scraper(element_ref, style_sheets, font, parse_state.clone(), href, index);
+                            inline_items.extend(inline);
+                        }
+                    }
+                }
+            }
+        }
+        (inline_items, final_text_align)
     }
 
 }

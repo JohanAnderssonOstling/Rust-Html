@@ -70,11 +70,23 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
 
 
 
+    // Helper function to detect if content is HTML (vs XHTML/XML)
+    fn is_html_content(content: &str) -> bool {
+        let trimmed = content.trim_start();
+        // Check for HTML5 doctype or html tag without XML declaration
+        trimmed.starts_with("<!DOCTYPE html") || 
+        (trimmed.starts_with("<html") && !trimmed.starts_with("<?xml"))
+    }
+    
     let documents: Vec<Document> = html_text.par_iter()
         .map(|section| {
-
             Document::parse(section).unwrap()
         }).collect();
+        
+    // Store HTML content for potential scraper-based parsing
+    let html_contents: Vec<(String, bool)> = html_text.iter()
+        .map(|section| (section.clone(), is_html_content(section)))
+        .collect();
     let css_strings: Vec<String> = epub.manifest().all_by_media_type("text/css").iter()
         .map(|css_name| epub.read_file(css_name.value()).unwrap())
         .collect();
@@ -84,9 +96,15 @@ pub fn create_epub_reader(path: &str, library_path: &str, prev_page: Page, signa
     //let style_sheets = Vec::new();
     let now = Instant::now();
     let mut book_factory = BookElemFactory::new(cache, image_map, &base_font);
-    let elems: Vec<HTMLPage> = documents.iter().zip(&sections)
-        .map(|document| {
-            book_factory.parse_root(document.0.root_element(), base_font, document.1.clone(), &style_sheets, document.0)
+    let elems: Vec<HTMLPage> = documents.iter().zip(&sections).zip(&html_contents)
+        .map(|((document, section), (html_content, is_html))| {
+            if false {
+                // Use scraper-based HTML parsing for HTML5 content
+                book_factory.parse_root_html(html_content, base_font, section.clone(), &style_sheets)
+            } else {
+                // Use roxmltree for XHTML/XML content
+                book_factory.parse_root(document.root_element(), base_font, section.clone(), &style_sheets, document)
+            }
         })
         .collect();
     let mut pages: HashMap<String, HTMLPage> = HashMap::with_capacity(elems.len());

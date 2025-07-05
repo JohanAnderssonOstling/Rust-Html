@@ -3,16 +3,16 @@ use lightningcss::properties::font::{AbsoluteFontSize, AbsoluteFontWeight, FontS
 use lightningcss::properties::text::TextAlign;
 use lightningcss::properties::Property;
 use lightningcss::rules::CssRule;
-use lightningcss::selector::{Combinator, Component, Selector};
 use lightningcss::stylesheet::StyleSheet;
 use lightningcss::values::length::{LengthPercentage, LengthPercentageOrAuto, LengthValue};
 use roxmltree::{Document, Node};
-use std::collections::HashMap;
+use scraper::{ElementRef, Html};
 use std::fmt::Pointer;
 use std::ops::Deref;
 use std::hash::{Hash, Hasher};
 use rustc_data_structures::fx::FxHashMap;
 use crate::book_elem::ParseState;
+use crate::styling::selector_matching::{can_selector_match, selector_matches2, selector_matches_scraper};
 
 // Pre-computed font size scaling factors for performance
 const FONT_SIZE_SCALES: [f64; 8] = [
@@ -131,6 +131,7 @@ impl Style {
                 style.insert(PropertyKey::MarginBottom, create_em(1.));
             }
             "h1" => {
+                println!("In h1");
                 style.font_size = Some(create_font_size(2.0));
                 style.insert(PropertyKey::MarginTop, create_em(0.67));
                 style.insert(PropertyKey::MarginBottom, create_em(0.67));
@@ -172,6 +173,13 @@ impl Style {
                 style.insert(PropertyKey::MarginLeft, create_px(40.));
                 style.insert(PropertyKey::MarginRight, create_px(40.));
             }
+            "em" => {
+                println!("In em");
+                style.insert(PropertyKey::FontStyle, CSSValue::TextStyle(floem_renderer::text::Style::Italic));
+            }
+            "strong" => {
+                style.insert(PropertyKey::FontWeight, CSSValue::FontWeight(FontWeight::Absolute(AbsoluteFontWeight::Bold)))
+            }
             _ => ()
         }
         style
@@ -190,6 +198,30 @@ impl Style {
         Style {
             font_size: None,
             properties: FxHashMap::with_capacity_and_hasher(capacity, Default::default()),
+        }
+    }
+    
+    pub fn apply_property(&mut self, property: &Property) {
+        match property {
+            Property::MarginTop(value) => self.insert(PropertyKey::MarginTop, CSSValue::Length(value.clone())),
+            Property::MarginRight(value) => self.insert(PropertyKey::MarginRight, CSSValue::Length(value.clone())),
+            Property::MarginBottom(value) => self.insert(PropertyKey::MarginBottom, CSSValue::Length(value.clone())),
+            Property::MarginLeft(value) => self.insert(PropertyKey::MarginLeft, CSSValue::Length(value.clone())),
+            Property::PaddingTop(value) => self.insert(PropertyKey::PaddingTop, CSSValue::Length(value.clone())),
+            Property::PaddingRight(value) => self.insert(PropertyKey::PaddingRight, CSSValue::Length(value.clone())),
+            Property::PaddingBottom(value) => self.insert(PropertyKey::PaddingBottom, CSSValue::Length(value.clone())),
+            Property::PaddingLeft(value) => self.insert(PropertyKey::PaddingLeft, CSSValue::Length(value.clone())),
+            Property::FontWeight(value) => self.insert(PropertyKey::FontWeight, CSSValue::FontWeight(value.clone())),
+            Property::TextAlign(value) => self.insert(PropertyKey::TextAlign, CSSValue::TextAlign(value.clone())),
+            Property::FontStyle(value) => self.insert(PropertyKey::FontStyle, CSSValue::TextStyle(
+                match value {
+                    FontStyle::Normal => floem_renderer::text::Style::Normal,
+                    FontStyle::Italic => floem_renderer::text::Style::Italic,
+                    FontStyle::Oblique(_) => floem_renderer::text::Style::Italic,
+                }
+            )),
+            Property::FontSize(value) => self.font_size = Some(value.clone()),
+            _ => {} // Ignore unsupported properties
         }
     }
 }
@@ -368,166 +400,88 @@ pub fn resolve_style(style_sheets: &Vec<StyleSheet>, node: &Node, font: &mut Att
     (margins, parse_state)
 }
 
-fn selector_matches(selectors: &Vec<&Component<>>, node: &Node, parse_state: &ParseState, document: &Document) -> bool {
-
-    // Parse the selector into sequences separated by combinators
-    let mut sequences = Vec::new();
-    let mut current_sequence = Vec::new();
-    let mut combinators = Vec::new();
-    
-    for component in selectors {
-        match component {
-            Component::Combinator(combinator) => {
-                if !current_sequence.is_empty() {
-                    sequences.push(current_sequence.clone());
-                    current_sequence.clear();
-                }
-                println!("FOund combinator");
-                combinators.push(combinator.clone());
-            }
-            _ => {
-                current_sequence.push(*component);
-            }
+fn apply_matched_rules(matched_rules: &[MatchedRule], style: &mut Style) {
+    for matched_rule in matched_rules {
+        for property in matched_rule.declarations {
+            style.apply_property(property);
         }
     }
-    
-    if !current_sequence.is_empty() {
-        sequences.push(current_sequence);
-    }
-    
-    // If no combinators, just match the single sequence against current node
-    if combinators.is_empty() {
-        return matches_sequence(&sequences[0], node);
-    }
-    
-    // Start with the rightmost sequence (the one that should match the current node)
-    if !matches_sequence(sequences.last().unwrap(), node) {
-        return false;
-    }
-    
-    // Work backwards through combinators
-    let mut current_ancestors = parse_state.ancestors.clone();
-    
-    for (i, combinator) in combinators.iter().enumerate().rev() {
-        let target_sequence = &sequences[i];
-        
-        match combinator {
-            Combinator::Child => {
-                // Direct parent must match
-                if let Some(parent_id) = current_ancestors.last() {
-                    if let Some(parent_node) = document.get_node(*parent_id) {
-                        if matches_sequence(target_sequence, &parent_node) {
-                            current_ancestors.pop(); // Move up one level
-                            continue;
+}
+
+// Scraper-compatible style functions
+pub fn apply_style_sheet_scraper(style_sheet: &StyleSheet, element: &ElementRef, style: &mut Style) {
+    let mut matched_rules: Vec<MatchedRule> = Vec::with_capacity(16);
+    let node_tag = element.value().name();
+    let node_id = element.value().attr("id");
+    let node_class = element.value().attr("class");
+
+    for (index, rule) in style_sheet.rules.0.iter().enumerate() {
+        match rule {
+            CssRule::Style(style_rule) => {
+                for selector in &style_rule.selectors.0 {
+                    // Fast pre-filtering: check if selector could possibly match this node
+                    if can_selector_match(selector, node_tag, node_id, node_class) {
+                        // For now, simplified matching - just match basic selectors
+                        if selector_matches_scraper(selector, element) {
+                            matched_rules.push(MatchedRule {
+                                specificity: selector.specificity(),
+                                source_order: index,
+                                declarations: &style_rule.declarations.declarations
+                            })
                         }
                     }
                 }
-                return false;
             }
-            Combinator::Descendant => {
-                // Any ancestor must match
-                let mut found = false;
-                while let Some(ancestor_id) = current_ancestors.pop() {
-                    if let Some(ancestor_node) = document.get_node(ancestor_id) {
-                        if matches_sequence(target_sequence, &ancestor_node) {
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-                if !found {
-                    return false;
-                }
-            }
-            _ => {
-                // Unsupported combinator
-                return false;
-            }
+            _ => (),
         }
     }
+    matched_rules.sort_by(|a, b| {
+        a.specificity.cmp(&b.specificity)
+            .then_with(|| a.source_order.cmp(&b.source_order))
+    });
     
-    true
+    // Apply matched rules to style
+    apply_matched_rules(&matched_rules, style);
 }
 
-fn matches_sequence(sequence: &Vec<&Component<>>, node: &Node) -> bool {
-    for component in sequence {
-        match component {
-            Component::ExplicitUniversalType => {} // Matches any element
-            Component::LocalName(name) => {
-                if node.tag_name().name() != name.lower_name.0.as_ref() {
-                    return false;
+pub fn resolve_style_scraper(style_sheets: &Vec<StyleSheet>, element: &ElementRef, font: &mut Attrs, mut parse_state: ParseState) -> (Margins, ParseState) {
+    let mut style = Style::new(element.value().name());
+    let mut margins = Margins {top: 0., right: 0., bottom: 0., left: 0.};
+    
+    for style_sheet in style_sheets {
+        apply_style_sheet_scraper(style_sheet, element, &mut style);
+    }
+    
+    if let Some(font_size) = &style.font_size {
+        let resolved_font_size = resolve_font_size(font_size, &parse_state, font.font_size as f64).round();
+        if resolved_font_size != 0. { *font = font.font_size(resolved_font_size as f32); }
+    }
+    
+    let font_size = font.font_size as f64;
+    for (key, value) in style.properties.iter() {
+        match value {
+            CSSValue::Length(value) => {
+                match key {
+                    PropertyKey::MarginTop      => margins.top      += resolve_length(value, &parse_state, font_size),
+                    PropertyKey::MarginRight    => margins.right    += resolve_length(value, &parse_state, font_size),
+                    PropertyKey::MarginBottom   => margins.bottom   += resolve_length(value, &parse_state, font_size),
+                    PropertyKey::MarginLeft     => margins.left     += resolve_length(value, &parse_state, font_size),
+                    PropertyKey::PaddingTop     => margins.top      += resolve_length(value, &parse_state, font_size),
+                    PropertyKey::PaddingRight   => margins.right    += resolve_length(value, &parse_state, font_size),
+                    PropertyKey::PaddingBottom  => margins.bottom   += resolve_length(value, &parse_state, font_size),
+                    PropertyKey::PaddingLeft    => margins.left     += resolve_length(value, &parse_state, font_size),
+                    _ => ()
                 }
             }
-            Component::ID(id) => {
-                if node.attribute("id").unwrap_or_default() != id.0.as_ref() {
-                    return false;
-                }
-            }
-            Component::Class(class_selector) => {
-                if let Some(class_attr) = node.attribute("class") {
-                    let classes: Vec<&str> = class_attr.split_whitespace().collect();
-                    if !classes.contains(&class_selector.as_ref()) {
-                        return false;
-                    }
-                } else {
-                    return false;
-                }
-            }
-            Component::AttributeInNoNamespace { local_name, value, .. } => {
-                if let Some(attr) = node.attribute(local_name.0.as_ref()) {
-                    if !attr.eq(value.0.as_ref()) {
-                        return false;
-                    }
-                } else {
-                    return false;
-                }
-            }
-            Component::AttributeInNoNamespaceExists { local_name, .. } => {
-                if node.attribute(local_name.0.as_ref()).is_none() {
-                    return false;
-                }
-            }
-            // Add other component types as needed
-            _ => {
-                // For now, ignore unsupported components
-            }
+            CSSValue::FontWeight(value) => {parse_state.font_weight = resolve_font_weight(value);}
+            CSSValue::TextAlign(value)  => parse_state.text_align = value.clone(),
+            CSSValue::TextStyle(text_style)    => parse_state.text_style = *text_style,
         }
     }
-    true
+    (margins, parse_state)
 }
 
-// Fast pre-filtering to reject selectors that can't possibly match
-fn can_selector_match(selector: &Selector, node_tag: &str, node_id: Option<&str>, node_class: Option<&str>) -> bool {
-    // Get the rightmost (target) selector components
-    let mut iter = selector.iter();
-    let target_components: Vec<_> = iter.by_ref().collect();
-    
-    for component in &target_components {
-        match component {
-            Component::LocalName(name) => {
-                if node_tag != name.lower_name.0.as_ref() {
-                    return false;
-                }
-            }
-            Component::ID(id) => {
-                if node_id.unwrap_or("") != id.0.as_ref() {
-                    return false;
-                }
-            }
-            Component::Class(class) => {
-                if let Some(classes) = node_class {
-                    if !classes.split_whitespace().any(|c| c == class.0.as_ref()) {
-                        return false;
-                    }
-                } else {
-                    return false;
-                }
-            }
-            _ => {} // Other components require full matching
-        }
-    }
-    true
-}
+
 
 fn resolve_font_size(value: &FontSize, parse_state: &ParseState, font_size: f64) -> f64 {
     match value {
@@ -607,103 +561,7 @@ fn resolve_length(value: &LengthPercentageOrAuto, parse_state: &ParseState, font
     }
 }
 
-fn sequence_matches(component: &Component, node: &Node) -> bool {
-    match component {
-        Component::ExplicitUniversalType => {true} // Matches any element
-        Component::LocalName(name) => {
-            node.tag_name().name() == name.lower_name.0.as_ref()
-        }
-        Component::ID(id) => {
-            node.attribute("id").unwrap_or_default() == id.0.as_ref()
-        }
-        Component::Class(class_selector) => {
-            if let Some(class_attr) = node.attribute("class") {
-                let classes: Vec<&str> = class_attr.split_whitespace().collect();
-                classes.contains(&class_selector.as_ref())
 
-            } else {
-                false
-            }
-        }
-        Component::AttributeInNoNamespace { local_name, value, .. } => {
-            if let Some(attr) = node.attribute(local_name.0.as_ref()) {
-                attr.eq(value.0.as_ref())
-            } else {
-                false
-            }
-        }
-        Component::AttributeInNoNamespaceExists { local_name, .. } => {
-            println!("No namespace");
-            node.attribute(local_name.0.as_ref()).is_some()
-        }
-        // Add other component types as needed
-        _ => {
-            println!("Unsopported: {:#?}", component);
-            return true;
-        }
-    }
-}
-
-fn selector_matches2(selector: &Selector, node: &Node, parse_state: &ParseState, document: &Document) -> bool{
-    let mut iter = selector.iter();
-
-    
-        //let node2 = document.get_node(*parse_state.ancestors.last().unwrap()).unwrap();
-        let sequences = iter.by_ref();
-        for sequence in sequences {
-            if !sequence_matches(sequence, node) {
-                return false;
-            }
-        }
-
-
-        if let Some(combinator) = iter.next_sequence() {
-            match combinator {
-                Combinator::Child => {
-                    let parent_id = parse_state.ancestors.last().unwrap();
-                    let parent = document.get_node(*parent_id).unwrap();
-                    let sequences = iter.by_ref();
-                    for sequence in sequences {
-                        if !sequence_matches(sequence, &parent) {
-                            return false;
-                        }
-                    }
-                }
-                Combinator::Descendant => {
-                    let mut matchs = false;
-                    let sequences: Vec<_> = iter.cloned().collect();
-                    //println!("Length: {}", parse_state.ancestors.len());
-                    for id in parse_state.ancestors.iter() {
-                        let mut matched = true;
-                        let parent = document.get_node(*id).unwrap();
-                        for sequence in &sequences {
-                            //println!("Looking");
-                           // println!("Sequences: {:#?}", sequence);
-                            if !sequence_matches(sequence, &parent) {
-                                //println!("Found");
-                                matched = false;
-                                break;
-                            }
-                        }
-                        if matched {
-                            matchs = true;
-                            break;
-                        }
-
-                    }
-                    if !matchs {
-                        
-                        return false;
-                    }
-                    
-                }
-                _ => {}
-            }
-        
-       
-    }
-    true
-}
 
 
 

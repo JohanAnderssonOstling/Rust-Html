@@ -3,8 +3,10 @@ use floem_renderer::text::Attrs;
 use lightningcss::properties::text::TextAlign;
 use lightningcss::stylesheet::StyleSheet;
 use roxmltree::{Document, Node};
+use scraper::ElementRef;
 use crate::book_elem::{BookElemFactory, CharGlyph, Elem, ElemLine, ElemLines, ElemType, InlineContent, InlineElem, ParseState};
 use crate::layout::layout_elem_lines;
+use crate::styling::style::resolve_style_scraper;
 const CELL_PAD_X: f64 = 10.0;   // px on the left *and* right
 const CELL_PAD_Y: f64 = 2.0;   // px on the top *and* bottom
 const ROW_GAP   : f64 = 6.0;   // empty space *between* rows
@@ -143,6 +145,154 @@ impl BookElemFactory {
 
         let total_width = col_widths.iter().sum::<f64>();
         //let total_height = row_heights.iter().sum::<f64>();
+        self.curr_y += total_height;
+
+        Elem {
+            size: Size::new(total_width, total_height),
+            point: init_point,
+            elem_type: ElemType::Lines(ElemLines {
+                height: 10.,
+                elem_lines: lines,
+            }),
+        }
+    }
+
+    pub fn parse_table_scraper(
+        &mut self,
+        elem_ref: ElementRef,
+        font: Attrs,
+        style_sheets: &Vec<StyleSheet>,
+        mut parse_state: ParseState,
+        mut index: Vec<usize>,
+    ) -> Elem {
+        use crate::book_elem::InlineItem;
+
+        let init_point = Point::new(self.curr_x, self.curr_y);
+
+        struct TableCell {
+            lines: ElemLines,
+            width: f64,
+            height: f64,
+        }
+
+        struct ParsedTableCell {
+            inline_items: Vec<InlineItem>,
+            text_align: TextAlign
+        }
+
+        let mut parsed_table_rows: Vec<Vec<ParsedTableCell>> = Vec::new();
+        let mut table_rows: Vec<Vec<TableCell>> = Vec::new();
+        let mut max_cols = 0;
+
+        // Find all tr elements using scraper
+        let tr_elements: Vec<ElementRef> = elem_ref.children()
+            .filter_map(|node| ElementRef::wrap(node))
+            .filter(|elem| elem.value().name() == "tr")
+            .collect();
+
+        for row_elem in &tr_elements {
+            let col_count = row_elem.children()
+                .filter_map(|node| ElementRef::wrap(node))
+                .filter(|elem| elem.value().name() == "td" || elem.value().name() == "th")
+                .count();
+            max_cols = max_cols.max(col_count);
+        }
+
+        let mut min_widths: Vec<f64> = vec![0.0; max_cols];
+        let mut max_widths: Vec<f64> = vec![0.0; max_cols];
+
+        for row_elem in &tr_elements {
+            let mut parsed_row_cells: Vec<ParsedTableCell> = Vec::new();
+            
+            let cell_elements: Vec<ElementRef> = row_elem.children()
+                .filter_map(|node| ElementRef::wrap(node))
+                .filter(|elem| elem.value().name() == "td" || elem.value().name() == "th")
+                .collect();
+
+            for (idx, cell_elem) in cell_elements.iter().enumerate() {
+                let (inline_items, text_align) = self.parse_inline_scraper(*cell_elem, style_sheets, font, parse_state.clone(), None, &index);
+                let mut min_width: f64 = 0.;
+                let mut max_width = 0.;
+                for inline_item in inline_items.iter() {
+                    let inline_width = inline_item.size.width;
+                    min_width = min_width.max(inline_width + CELL_PAD_X);
+                    max_width += inline_width;
+                }
+                min_widths[idx] = min_widths[idx].max(min_width);
+                max_widths[idx] = max_widths[idx].max(max_width);
+                let parsed_table_cell = ParsedTableCell {inline_items, text_align};
+                parsed_row_cells.push(parsed_table_cell);
+            }
+            parsed_table_rows.push(parsed_row_cells);
+        }
+
+        let max_width = parse_state.width - CELL_PAD_X * (max_cols - 1) as f64;
+        let col_widths = resolve_auto_widths(&min_widths, &max_widths, max_width);
+        
+        for row in parsed_table_rows {
+            let mut col_idx = 0;
+            let mut row_cells: Vec<TableCell> = Vec::new();
+
+            for cell in row {
+                parse_state.width = *col_widths.get(col_idx).unwrap();
+                parse_state.text_align = cell.text_align;
+                let elem = layout_elem_lines(self, cell.inline_items, &parse_state);
+                self.curr_y -= elem.size.height;
+                match elem.elem_type {
+                    ElemType::Lines(lines) => {
+                        row_cells.push(TableCell {
+                            width: elem.size.width,
+                            height: elem.size.height,
+                            lines,
+                        });
+                    }
+                    _ => panic!("Expected table cell to yield ElemType::Lines"),
+                }
+                col_idx += 1;
+            }
+            table_rows.push(row_cells);
+        }
+
+        let mut row_heights: Vec<f64> = Vec::with_capacity(table_rows.len());
+        let mut lines: Vec<ElemLine> = Vec::new();
+        let mut y_cursor = 0.0;
+        let mut tallest_row_idx: usize = 0;
+        let mut tallest_row_height = 0.0;
+
+        let mut total_height = 0.;
+        for (row_idx, row) in table_rows.iter().enumerate() {
+            let max_lines = row
+                .iter()
+                .map(|cell| cell.lines.elem_lines.len())
+                .max()
+                .unwrap_or(0);
+
+            let mut row_height = 0.0;
+
+            for line_idx in 0..max_lines {
+                let mut x_cursor = 0.0;
+                let mut inline_elems = Vec::<InlineElem>::new();
+                let mut line_height: f64 = 0.0;
+                
+                for (col_idx, cell) in row.iter().enumerate() {
+                    if let Some(elem_line) = cell.lines.elem_lines.get(line_idx) {
+                        line_height = line_height.max(elem_line.height);
+
+                        for mut inline in elem_line.inline_elems.clone() {
+                            inline.x += x_cursor;
+                            inline_elems.push(inline);
+                        }
+                    }
+                    x_cursor += col_widths[col_idx] + CELL_PAD_X;
+                }
+
+                row_height += line_height;
+                lines.push(ElemLine { height: line_height, inline_elems });
+            }
+            total_height += row_height;
+        }
+
+        let total_width = col_widths.iter().sum::<f64>();
         self.curr_y += total_height;
 
         Elem {
